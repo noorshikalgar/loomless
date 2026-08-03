@@ -89,8 +89,7 @@ func renderWindowStep(pdf *fpdf.Fpdf, step session.Step, dir string) {
 		pdf.MultiCell(0, 6, safe("Window: "+windowLine), "", "L", false)
 	}
 	if step.Note != "" {
-		pdf.SetFont("Helvetica", "", 11)
-		pdf.MultiCell(0, 6, safe(step.Note), "", "L", false)
+		writeNotePDF(pdf, step.Note)
 	}
 	if step.ImageFile == "" {
 		return

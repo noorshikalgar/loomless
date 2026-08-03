@@ -1074,6 +1074,99 @@ this environment can't synthesize a real OS-level click), but the code
 path a real click goes through is unchanged from decision #15's own
 verification, only the default feeding into it changed.
 
+## 22. Captions support Markdown, rendered (not just escaped) in every export
+
+Decided 2026-08-03, direct request ("captions should support md format").
+Markdown export needed no code change — `Step.Note` was already written
+into the `.md` file as raw, unescaped text, so any Markdown syntax a user
+typed was already going to render correctly the moment someone opened
+that file in a Markdown viewer. PDF and Slides previously ran `Note`
+through plain-text escaping (`safe()`/`html.EscapeString`), so `**bold**`
+would show up as the literal four asterisks — this decision is really
+about those two.
+
+**Dependency**: added `github.com/yuin/goldmark` (pure Go, no cgo,
+CommonMark-compliant, BSD-licensed, the de facto standard Go Markdown
+library) rather than hand-rolling a regex-based inline parser. A caption
+is free-typed human text, and free-typed text reliably finds every edge
+case a hand-rolled parser gets wrong — unmatched `*`, nested emphasis,
+literal `<`/`>`, escaped characters — so this is exactly the situation a
+well-tested, widely-used parser earns its dependency weight, consistent
+with how `go-pdf/fpdf` and `golang.org/x/image` were already accepted
+for the same reason (a correctly-solved problem beats a partially-solved
+one written from scratch).
+
+**Slides** (`internal/export/note.go`'s `noteHTML`): `goldmark.Convert`
+straight to HTML, dropped into a `<div class="note">` (was `<p
+class="note">` around escaped text). goldmark's default renderer
+*escapes* raw HTML in the source rather than passing it through live (no
+`html.WithUnsafe()`) — a caption containing something that looks like
+`<script>` stays inert text, same safety property `html.EscapeString`
+had, Markdown support just isn't traded away to get it. `.slide`'s
+`text-align: center` doesn't suit multi-paragraph/list caption content,
+so `.note` now sets `text-align: left` — the one visible layout change
+beyond the caption itself, and a direct consequence of captions now
+being able to contain structured content instead of a single line.
+
+**PDF** (`internal/export/note.go`'s `writeNotePDF`) is the more involved
+half, and deliberately does *not* go through fpdf's own `HTMLBasicType`
+HTML-string writer: that writer re-tokenizes its input with a regex that
+has no entity-decoding step, so a caption containing a literal `<` or `>`
+(plausible in a dev tool — `"if x < 5"`) would either show up as literal
+`&lt;` or, worse, get misread as the start of an unclosed tag and
+silently swallow everything up to the next `>`. Instead, `writeNotePDF`
+walks goldmark's parsed AST directly and calls fpdf's text primitives
+(`Write`/`WriteLinkString`/`SetFont`/`SetTextColor`) itself — no HTML
+string is ever constructed or re-parsed, so there's nothing for a stray
+angle bracket to be misinterpreted as. Bold/italic map to `SetFont`
+style flags; inline code switches the *font family* to Courier (a core
+PDF font already used by the terminal-step renderer, not an embedded
+asset) for a real monospace look rather than approximating it with
+italics; links get `WriteLinkString` (a genuine clickable PDF link
+annotation, confirmed via `page.get_links()` in a real generated PDF,
+not just a plain glyph) plus a legible blue (`RGB(37,99,235)`) so a link
+actually looks like one — an initial pass shipped the link as
+functionally clickable but visually indistinguishable from body text,
+caught by looking at the rendered output rather than trusting a green
+test run. Font and text color are captured before any caption rendering
+starts and explicitly restored afterward (and after every individual
+link), since every caller renders a caption and then keeps going with
+plain text right after it — nothing about a caption should leak into
+whatever comes next.
+
+**Verified:**
+
+1. Unit tests (`internal/export/note_test.go`):
+   `TestNoteHTMLRendersBasicMarkdown` (bold/italic/code/link/list all
+   produce the expected HTML tags), `TestNoteHTMLEscapesRawHTML` (a
+   caption containing `<script>` never becomes a live tag in the
+   output), `TestWriteNotePDFDoesNotErrorOnEdgeCases` (a sweep of
+   plausible captions — empty, plain, nested emphasis, an unmatched lone
+   `*`, literal `<`/`>` both close together and far apart, a link with
+   query-string special characters, lists, multiple paragraphs, Unicode,
+   a long wrapping caption — none may leave the PDF in an error state or
+   fail to produce output), and `TestWriteNotePDFRestoresFont` (asserts
+   both the font size *and*, via `GetStringWidth` compared against a
+   never-touched reference instance — since fpdf exposes no direct
+   family/style getter, and bold/Courier glyphs really do measure
+   differently — that the family and style are back to
+   Helvetica/regular, plus that text color is restored to whatever it
+   was before rendering started).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Generated real PDF and Slides output from a live session with a
+   caption exercising every feature at once (bold, inline code, a link,
+   a bullet list, and the literal-angle-bracket edge case in the same
+   caption) and inspected the actual rendered result, not just that the
+   code ran without error: the Slides HTML in a real browser showed
+   correctly styled bold/code/link/list text with the angle-bracket text
+   rendered literally (not broken, not swallowing content); the PDF,
+   rasterized page-by-page with PyMuPDF and read as an image, showed the
+   same — bold text, a genuine Courier-font code span, and (after the
+   color fix above) a visibly blue link — and `page.get_links()` on the
+   real PDF confirmed a working `https://` URI annotation positioned
+   exactly under the link text, not just plain glyphs that merely looked
+   like a link.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

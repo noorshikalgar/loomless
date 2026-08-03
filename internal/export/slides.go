@@ -59,7 +59,12 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 				fmt.Fprintf(&b, "<p class=\"window\">%s</p>\n", html.EscapeString(windowLine))
 			}
 			if step.Note != "" {
-				fmt.Fprintf(&b, "<p class=\"note\">%s</p>\n", html.EscapeString(step.Note))
+				noteRendered, err := noteHTML(step.Note)
+				if err != nil {
+					fmt.Fprintf(&b, "<p class=\"note\">%s</p>\n", html.EscapeString(step.Note))
+				} else {
+					fmt.Fprintf(&b, "<div class=\"note\">%s</div>\n", noteRendered)
+				}
 			}
 			if step.ImageFile != "" {
 				if dataURI, err := imageDataURI(dir, step); err == nil {
@@ -99,7 +104,12 @@ const slidesCSS = `<style>
   .subtitle { color: #aaa; font-style: italic; }
   .hint { color: #777; margin-top: 2rem; font-size: 0.9rem; }
   .window { font-weight: 600; color: #8ab4ff; margin-bottom: 0.5rem; }
-  .note { font-size: 1.1rem; max-width: 60ch; margin-bottom: 1.5rem; }
+  .note { font-size: 1.1rem; max-width: 60ch; margin-bottom: 1.5rem; text-align: left; }
+  .note p { margin: 0 0 0.6em; }
+  .note p:last-child { margin-bottom: 0; }
+  .note code { background: #26262b; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.92em; }
+  .note a { color: #8ab4ff; }
+  .note ul, .note ol { margin: 0 0 0.6em; padding-left: 1.4em; }
   .exit { color: #ff8a8a; font-weight: 600; }
   img { max-width: 85vw; max-height: 60vh; border-radius: 6px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
   pre { max-width: 85vw; overflow-x: auto; text-align: left; background: #26262b; padding: 1rem; border-radius: 6px; font-size: 0.9rem; }
