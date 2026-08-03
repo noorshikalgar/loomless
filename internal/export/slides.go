@@ -35,10 +35,11 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 		subtitle += " – " + s.StoppedAt.Format("15:04")
 	}
 	fmt.Fprintf(&b, "<p class=\"subtitle\">%s</p>\n", html.EscapeString(subtitle))
-	fmt.Fprintf(&b, "<p class=\"hint\">%d step(s) — use arrow keys or the buttons below</p>\n", len(s.Steps))
+	steps := s.VisibleSteps()
+	fmt.Fprintf(&b, "<p class=\"hint\">%d step(s) — use arrow keys or the buttons below</p>\n", len(steps))
 	b.WriteString("</section>\n")
 
-	for _, step := range s.Steps {
+	for _, step := range steps {
 		b.WriteString("<section class=\"slide\">\n")
 		fmt.Fprintf(&b, "<h2>Step %d</h2>\n", step.Index)
 

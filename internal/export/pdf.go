@@ -43,12 +43,13 @@ func PDF(s *session.Session, dir string) ([]byte, error) {
 	pdf.MultiCell(0, 6, safe(subtitle), "", "L", false)
 	pdf.Ln(4)
 
-	if len(s.Steps) == 0 {
+	steps := s.VisibleSteps()
+	if len(steps) == 0 {
 		pdf.SetFont("Helvetica", "I", 11)
 		pdf.MultiCell(0, 6, "No steps captured.", "", "L", false)
 	}
 
-	for _, step := range s.Steps {
+	for _, step := range steps {
 		pdf.SetFont("Helvetica", "B", 14)
 		pdf.MultiCell(0, 9, safe(fmt.Sprintf("Step %d", step.Index)), "", "L", false)
 

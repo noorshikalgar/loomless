@@ -422,6 +422,72 @@ verify" and "verified working" are different claims and this is the
 former for keyboard nav specifically, even though the underlying logic
 was independently confirmed correct by other means.
 
+## 14. Local editor — web UI, resolves open question #12, real edit-log implementation of decision #4
+
+Decided 2026-08-03 (last Phase 2 item this pass — screenshot redaction is
+a separate follow-up, not included). `story edit <name>` runs a
+localhost-only (`127.0.0.1`, never `0.0.0.0` — this is a single-user local
+tool, not something to expose on a network) HTTP server
+(`internal/editor`) serving a single-page app: reorder steps, hide/show
+them, edit captions. Resolves open question #12 in favor of a web UI, not
+a TUI — `08-technical-considerations.md`'s own reasoning already pointed
+here ("a browser-based local UI handles [visual editing] far more easily
+than a TUI"), and this slice already needs to show screenshots inline
+next to editable captions, which a TUI can't do at all.
+
+**This is also the first real implementation of decision #4's data model**
+(mutable-with-activity-log), not just the decision to build one later.
+`Session` gained `DisplayOrder`/`Hidden`/`EditLog` — deliberately kept
+separate from `Steps` rather than mutating step order/identity in place:
+a `Step`'s `Index` (and everything derived from it — `image_file`,
+`output_file`) is capture-time data that's never renumbered, exactly the
+"capture-time data should never silently change" principle
+`06-editing-and-versioning.md` states. Reordering/hiding/captioning are
+presentation-time edits layered on top, each one appended to `EditLog`
+with old/new values — the "visible activity log" that document requires.
+Every exporter (Markdown/PDF/Slides) now goes through a new
+`Session.VisibleSteps()` helper instead of ranging over `Steps` directly,
+so a hide/reorder edit is guaranteed to show up in every export format,
+not just whichever one someone remembered to update.
+
+Edited captions run through the same `internal/mask` secret-masking
+(decision #7) new captured text does — an edited caption is just as
+capable of containing a pasted secret as an originally-typed one, and
+masking being "unconditional across every capture path" should mean every
+*text-entry* path too, not just the original ones.
+
+**Verified with real unit tests, not just manual clicking**, for the
+trickiest part (`VisibleSteps()`'s ordering/filtering logic — the exact
+kind of easy-to-get-subtly-wrong logic the mask false-positive earlier in
+this project was): natural order, explicit reorder, hidden exclusion,
+both together, all-hidden (empty result, not a crash), and a stale
+`DisplayOrder` entry referencing a step that no longer exists (skipped,
+not a crash) — `internal/session/session_test.go`. All passed first try.
+
+**Then verified interactively for real**, the same way the slide-deck
+click bug was caught: started a real editor server against a real
+session (3 steps: one window/screenshot step, one terminal step, one more
+window/screenshot step), drove it through the actual Browser tool —
+clicked "Hide" on step 3 (confirmed dimmed in the UI, confirmed
+`hidden: [3]` + an `EditLog` entry on disk), edited step 3's caption and
+saved (confirmed the new text persisted, confirmed the old and new values
+both landed in `EditLog`), and reordered steps 1 and 2 (confirmed the
+swap rendered correctly, confirmed `display_order: [2,1,3]` on disk). Then
+re-exported to Markdown and Slides and confirmed both showed steps in the
+edited order with step 3 excluded — the same `VisibleSteps()` call the
+unit tests already covered, now confirmed wired correctly end to end
+through the HTTP API and browser UI on top of it, not just correct in
+isolation.
+
+**Screenshot redaction/crop — the visual-editing capability that most
+motivated choosing a web UI over a TUI in the first place — is
+deliberately not included in this pass.** It's a distinct enough
+sub-feature (client-side canvas drawing + server-side image
+pixel-flattening, with its own correctness bar: a redaction has to
+actually make the covered content unrecoverable, not just visually hide
+it) that it deserves its own focused pass rather than being squeezed in
+here. Flagged as a follow-up task, not silently dropped.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

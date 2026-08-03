@@ -11,11 +11,11 @@ Claude Code) narrating its own work through an MCP interface.
 
 ## Status
 
-**Phase 1.5 (agent path) done, all three Phase 2 export formats done.
-macOS: full support. Linux: window/terminal capture works (X11 only),
-automatic click-capture doesn't yet.** The human path (click-capture,
-terminal capture, secret-masking, idle-timeout nudge, Markdown/PDF/slides
-export) and the agent path (MCP server) both work end to end on macOS. See
+**Phase 1.5 (agent path) done. Human path on macOS: click-capture,
+terminal capture, secret-masking, idle-timeout nudge, a local editor
+(reorder/hide/caption), and Markdown/PDF/slides export all work. Linux:
+window/terminal capture works (X11 only), automatic click-capture
+doesn't yet.** The agent path (MCP server) works end to end on macOS. See
 [`docs/product/00-README.md`](docs/product/00-README.md) for the full
 product write-up, [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
 for what's still undecided, and [`docs/product/11-decisions.md`](docs/product/11-decisions.md)
@@ -26,7 +26,8 @@ screenshots: **window-scoped, not full-screen**; terminal capture: **explicit
 capture time**; Linux: **X11 via standard tools, no click-capture yet**;
 forgotten recordings: **desktop notification after 20min idle, not
 auto-stop**; PDF/slides: **rendered directly from session data, pure Go,
-no headless-browser/CDN dependency**). Not done: local editor,
+no headless-browser/CDN dependency**; local editor: **web UI,
+not TUI — see decision #14**). Not done: screenshot redaction,
 auto-captions, Windows, Wayland, sharing — all later phases.
 
 ## Why
@@ -75,6 +76,7 @@ go build -o story ./cmd/story
 ./story step "optional note, no click needed"
 ./story run -- go test ./...     # captures the command + its output as a step
 ./story record stop
+./story edit my-first-story                   # reorder, hide, or fix up captions in a browser
 ./story export my-first-story                 # Markdown (default)
 ./story export my-first-story --format pdf    # or a PDF, screenshots embedded
 ./story export my-first-story --format slides # or a self-contained HTML slide deck

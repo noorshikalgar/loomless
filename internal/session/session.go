@@ -45,11 +45,43 @@ type Step struct {
 }
 
 // Session is one recording: a named, ordered sequence of steps.
+//
+// Steps themselves are capture-time data — per decision #4 in
+// docs/product/11-decisions.md, never renumbered or reordered in place,
+// so a Step's Index stays a stable reference to its original capture
+// (and its image_file/output_file names, which are derived from it).
+// DisplayOrder, Hidden, and EditLog are the presentation-time layer the
+// local editor (story edit) writes to: reordering, hiding, and captioning
+// change how a story is *read*, not what was *captured*.
 type Session struct {
 	Name      string     `json:"name"`
 	StartedAt time.Time  `json:"started_at"`
 	StoppedAt *time.Time `json:"stopped_at,omitempty"`
 	Steps     []Step     `json:"steps"`
+
+	// DisplayOrder lists Step.Index values in the order they should be
+	// rendered. Empty/nil means natural capture order — every exporter
+	// must go through VisibleSteps() rather than ranging over Steps
+	// directly, so this is never forgotten in a new export format.
+	DisplayOrder []int `json:"display_order,omitempty"`
+	// Hidden lists Step.Index values excluded from rendering. The
+	// underlying Step and its files are never deleted — "hidden" is
+	// reversible, matching the edit log's own reversibility.
+	Hidden []int `json:"hidden,omitempty"`
+	// EditLog is every edit made after capture, oldest first — the
+	// "visible activity log" docs/product/06-editing-and-versioning.md
+	// requires so a reader can tell a story was touched after recording,
+	// not just trust it silently.
+	EditLog []EditEntry `json:"edit_log,omitempty"`
+}
+
+// EditEntry is one recorded change to a session's presentation layer.
+type EditEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Action    string    `json:"action"` // "reorder" | "hide" | "unhide" | "edit_note"
+	StepIndex int       `json:"step_index"`
+	OldValue  string    `json:"old_value,omitempty"`
+	NewValue  string    `json:"new_value,omitempty"`
 }
 
 // Root returns ~/.story, the base directory for all local session data.
@@ -351,4 +383,156 @@ func (s *Session) Stop(dir string) error {
 		return err
 	}
 	return clearCurrent()
+}
+
+// VisibleSteps returns steps in display order with hidden ones excluded —
+// every exporter (Markdown/PDF/Slides) must use this instead of ranging
+// over Session.Steps directly, or a reorder/hide edit silently wouldn't
+// take effect in that format.
+func (s *Session) VisibleSteps() []Step {
+	byIndex := make(map[int]Step, len(s.Steps))
+	for _, step := range s.Steps {
+		byIndex[step.Index] = step
+	}
+	hidden := make(map[int]bool, len(s.Hidden))
+	for _, i := range s.Hidden {
+		hidden[i] = true
+	}
+
+	order := s.DisplayOrder
+	if len(order) == 0 {
+		order = make([]int, len(s.Steps))
+		for i, step := range s.Steps {
+			order[i] = step.Index
+		}
+	}
+
+	visible := make([]Step, 0, len(order))
+	for _, idx := range order {
+		if hidden[idx] {
+			continue
+		}
+		if step, ok := byIndex[idx]; ok {
+			visible = append(visible, step)
+		}
+	}
+	return visible
+}
+
+// ReorderSteps reloads the named session, replaces DisplayOrder wholesale
+// with newOrder (validated to be a permutation of the session's actual
+// step indices — partial or garbage input is rejected rather than
+// silently dropping steps from the story), logs the change, and saves.
+func ReorderSteps(name string, newOrder []int) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	valid := make(map[int]bool, len(s.Steps))
+	for _, step := range s.Steps {
+		valid[step.Index] = true
+	}
+	if len(newOrder) != len(valid) {
+		return nil, fmt.Errorf("reorder must include exactly the session's %d step(s), got %d", len(valid), len(newOrder))
+	}
+	seen := make(map[int]bool, len(newOrder))
+	for _, idx := range newOrder {
+		if !valid[idx] {
+			return nil, fmt.Errorf("step %d does not exist in this session", idx)
+		}
+		if seen[idx] {
+			return nil, fmt.Errorf("step %d listed more than once", idx)
+		}
+		seen[idx] = true
+	}
+
+	s.DisplayOrder = newOrder
+	s.EditLog = append(s.EditLog, EditEntry{Timestamp: time.Now(), Action: "reorder", NewValue: fmt.Sprint(newOrder)})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// SetStepHidden reloads the named session, marks a step hidden or
+// visible, logs the change, and saves.
+func SetStepHidden(name string, stepIndex int, hidden bool) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	found := false
+	for _, step := range s.Steps {
+		if step.Index == stepIndex {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	}
+
+	currentlyHidden := false
+	newHidden := s.Hidden[:0:0]
+	for _, idx := range s.Hidden {
+		if idx == stepIndex {
+			currentlyHidden = true
+			continue // drop it; re-added below if hidden==true
+		}
+		newHidden = append(newHidden, idx)
+	}
+	if hidden {
+		newHidden = append(newHidden, stepIndex)
+	}
+	s.Hidden = newHidden
+
+	if hidden != currentlyHidden {
+		action := "unhide"
+		if hidden {
+			action = "hide"
+		}
+		s.EditLog = append(s.EditLog, EditEntry{Timestamp: time.Now(), Action: action, StepIndex: stepIndex})
+	}
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// EditNote reloads the named session, replaces a step's Note (masked the
+// same way capture-time text is — an edited caption is just as capable of
+// containing a pasted secret as an originally-typed one), logs the old
+// and new values, and saves.
+func EditNote(name string, stepIndex int, newNote string) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	maskedNote, matched := mask.Text(newNote)
+	found := false
+	var oldNote string
+	for i := range s.Steps {
+		if s.Steps[i].Index == stepIndex {
+			oldNote = s.Steps[i].Note
+			s.Steps[i].Note = maskedNote
+			s.Steps[i].Masked = mergeRules(s.Steps[i].Masked, matched)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	}
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "edit_note", StepIndex: stepIndex,
+		OldValue: oldNote, NewValue: maskedNote,
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
 }

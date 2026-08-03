@@ -11,10 +11,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/noorshikalgar/story/internal/capture"
+	"github.com/noorshikalgar/story/internal/editor"
 	"github.com/noorshikalgar/story/internal/engine"
 	"github.com/noorshikalgar/story/internal/session"
 )
@@ -37,6 +44,8 @@ func main() {
 		err = cmdWindows(os.Args[2:])
 	case "export":
 		err = cmdExport(os.Args[2:])
+	case "edit":
+		err = cmdEdit(os.Args[2:])
 	case "mcp":
 		err = cmdMCP(os.Args[2:])
 	case "__click-daemon":
@@ -71,6 +80,7 @@ Usage:
   story run [--] <cmd> [args]   Run a command, capture it + its output as a step
   story windows list            List candidate windows to capture
   story export <name> [--format md|pdf|slides]   Render a session (default: md)
+  story edit <name>             Open the local web editor (reorder/hide/caption)
   story mcp                     Run the MCP server (stdio) for agent-driven capture
 
 Session data lives under ~/.story/sessions/<name>/.`)
@@ -265,4 +275,54 @@ func cmdExport(args []string) error {
 
 func cmdMCP(args []string) error {
 	return runMCPServer(context.Background())
+}
+
+// cmdEdit starts the local web editor (internal/editor) bound to
+// 127.0.0.1 only — this is a single-user local tool, not something to
+// expose on the network — on an OS-assigned free port, best-effort opens
+// it in the default browser, and serves until Ctrl+C.
+func cmdEdit(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: story edit <name>")
+	}
+	name := args[0]
+
+	handler, err := editor.NewHandler(name)
+	if err != nil {
+		return err
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("start editor server: %w", err)
+	}
+	url := fmt.Sprintf("http://%s/", ln.Addr().String())
+	fmt.Printf("Editor for %q running at %s (Ctrl+C to stop)\n", name, url)
+	openBrowser(url)
+
+	server := &http.Server{Handler: handler}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		server.Close()
+	}()
+
+	if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	default:
+		return
+	}
+	_ = cmd.Start() // best-effort; the printed URL works regardless if this fails
 }

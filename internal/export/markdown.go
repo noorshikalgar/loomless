@@ -22,12 +22,13 @@ func Markdown(s *session.Session) string {
 	}
 	b.WriteString("_\n\n")
 
-	if len(s.Steps) == 0 {
+	steps := s.VisibleSteps()
+	if len(steps) == 0 {
 		b.WriteString("_No steps captured._\n")
 		return b.String()
 	}
 
-	for _, step := range s.Steps {
+	for _, step := range steps {
 		fmt.Fprintf(&b, "## Step %d\n\n", step.Index)
 
 		if step.Command != "" {
