@@ -67,8 +67,9 @@ func runMCPServer(ctx context.Context) error {
 		Name: "generate_story",
 		Description: "Render a session, default format Markdown. Markdown's " +
 			"content is returned directly — include it in your final response, " +
-			"or write it into the PR/ticket you're producing. PDF is written to " +
-			"disk only (content isn't returned inline); use it when the human " +
+			"or write it into the PR/ticket you're producing. PDF and slides " +
+			"(a self-contained HTML slide deck) are written to disk only " +
+			"(content isn't returned inline); use one of those when the human " +
 			"wants a shareable file rather than inline text.",
 	}, generateStoryTool)
 
@@ -160,12 +161,12 @@ func stopRecordingTool(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*
 
 type generateStoryIn struct {
 	Name   string `json:"name" jsonschema:"The session name to render (as passed to start_recording)."`
-	Format string `json:"format,omitempty" jsonschema:"'markdown' (default) or 'pdf'."`
+	Format string `json:"format,omitempty" jsonschema:"'markdown' (default), 'pdf', or 'slides' (self-contained HTML slide deck)."`
 }
 
 type generateStoryOut struct {
 	Path    string `json:"path"`
-	Content string `json:"content,omitempty" jsonschema:"The rendered Markdown — include this directly in your response. Empty for PDF."`
+	Content string `json:"content,omitempty" jsonschema:"The rendered Markdown — include this directly in your response. Empty for PDF/slides."`
 }
 
 func generateStoryTool(_ context.Context, _ *mcp.CallToolRequest, in generateStoryIn) (*mcp.CallToolResult, generateStoryOut, error) {
@@ -185,8 +186,14 @@ func generateStoryTool(_ context.Context, _ *mcp.CallToolRequest, in generateSto
 			return nil, generateStoryOut{}, err
 		}
 		return nil, generateStoryOut{Path: path}, nil
+	case "slides":
+		path, err := engine.ExportSlides(in.Name)
+		if err != nil {
+			return nil, generateStoryOut{}, err
+		}
+		return nil, generateStoryOut{Path: path}, nil
 	default:
-		return nil, generateStoryOut{}, fmt.Errorf("unknown format %q (want markdown or pdf)", in.Format)
+		return nil, generateStoryOut{}, fmt.Errorf("unknown format %q (want markdown, pdf, or slides)", in.Format)
 	}
 }
 

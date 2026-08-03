@@ -70,7 +70,7 @@ Usage:
   story step ["note"]           Manually capture the frontmost window as a step
   story run [--] <cmd> [args]   Run a command, capture it + its output as a step
   story windows list            List candidate windows to capture
-  story export <name> [--format md|pdf]   Render a session (default: md)
+  story export <name> [--format md|pdf|slides]   Render a session (default: md)
   story mcp                     Run the MCP server (stdio) for agent-driven capture
 
 Session data lives under ~/.story/sessions/<name>/.`)
@@ -223,19 +223,19 @@ func cmdExport(args []string) error {
 		switch args[i] {
 		case "--format":
 			if i+1 >= len(args) {
-				return fmt.Errorf("--format needs a value (md or pdf)")
+				return fmt.Errorf("--format needs a value (md, pdf, or slides)")
 			}
 			format = args[i+1]
 			i++
 		default:
 			if name != "" {
-				return fmt.Errorf("usage: story export <name> [--format md|pdf]")
+				return fmt.Errorf("usage: story export <name> [--format md|pdf|slides]")
 			}
 			name = args[i]
 		}
 	}
 	if name == "" {
-		return fmt.Errorf("usage: story export <name> [--format md|pdf]")
+		return fmt.Errorf("usage: story export <name> [--format md|pdf|slides]")
 	}
 
 	switch format {
@@ -251,8 +251,14 @@ func cmdExport(args []string) error {
 			return err
 		}
 		fmt.Println(path)
+	case "slides":
+		path, err := engine.ExportSlides(name)
+		if err != nil {
+			return err
+		}
+		fmt.Println(path)
 	default:
-		return fmt.Errorf("unknown format %q (want md or pdf)", format)
+		return fmt.Errorf("unknown format %q (want md, pdf, or slides)", format)
 	}
 	return nil
 }

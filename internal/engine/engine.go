@@ -212,6 +212,25 @@ func ExportPDF(name string) (path string, err error) {
 	return outPath, nil
 }
 
+// ExportSlides renders a session to a self-contained HTML slide deck
+// (screenshots embedded as base64 data URIs, no CDN dependency — see
+// decision #13) and writes it alongside the session.
+func ExportSlides(name string) (path string, err error) {
+	s, dir, err := session.Load(name)
+	if err != nil {
+		return "", err
+	}
+	data, err := export.Slides(s, dir)
+	if err != nil {
+		return "", err
+	}
+	outPath := dir + "/" + name + ".html"
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return "", fmt.Errorf("write export: %w", err)
+	}
+	return outPath, nil
+}
+
 // startClickDaemon relaunches the current executable in the background to
 // run the global click listener, since holding a CFRunLoop open means that
 // process can't also be the short-lived command that started the session.

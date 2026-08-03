@@ -374,6 +374,54 @@ identical result from the identical pure-Go code path (no OS-specific
 code exists in `pdf.go`, so this was mostly confirming that expectation
 rather than expecting a surprise, but confirmed rather than assumed).
 
+## 13. Slide-deck export — self-contained HTML, no CDN dependency
+
+Decided 2026-08-03 (third and final Phase 2 export format).
+`story export <name> --format slides` and the MCP `generate_story` tool's
+`format: "slides"` render a single self-contained `.html` file
+(`internal/export/slides.go`) — one step per slide, step-through via
+on-screen Prev/Next buttons or arrow keys, screenshots embedded as base64
+data URIs so the file has no dependency on the `images/` folder traveling
+with it (unlike Markdown's relative links).
+
+**No CDN.** `08-technical-considerations.md` mentions reveal.js as a
+possible approach; deliberately not used here — a slide deck that only
+renders with an internet connection contradicts this project's
+local-first stance (decision #3). The whole deck (CSS, JS, markup, images)
+is under 400 own hand-written lines plus embedded image bytes; a full
+presentation framework would be a lot of dependency for what a browser
+already does natively.
+
+**Bug found and fixed via actual interactive browser testing, not just
+"the file was created":** the first version wired the Prev/Next buttons
+via inline `onclick="..."` HTML attributes. Verified in this project's
+Browser tool (served over local HTTP — `file://` navigation is blocked by
+the tool) that clicking the buttons at their exact, confirmed-correct
+on-screen coordinates did **nothing** — the slide counter never advanced.
+Isolated the cause methodically: `elementFromPoint` at the click
+coordinates confirmed the click was landing squarely on the right button
+(not an overlap/z-index issue); calling `document.getElementById
+('nextBtn').click()` from the console worked instantly; calling the
+`storyGo()` function directly worked instantly. Only the *synthetic click
+dispatched by the testing tool* failed to trigger the inline `onclick`
+handler specifically — switching to `addEventListener('click', ...)`
+(strictly better practice regardless) fixed it, re-verified with the same
+real synthetic click producing the correct slide change afterward.
+
+A related, narrower finding: the *keyboard* arrow-key path's listener
+logic was independently confirmed correct (`document.dispatchEvent(new
+KeyboardEvent('keydown', {key:'ArrowLeft', bubbles:true}))` from the
+console advances the slide exactly as the code intends), but the testing
+tool's own synthetic key-press action didn't produce a `KeyboardEvent`
+the page could see — appears to be a limitation of that specific
+automation tool's key-dispatch, not a defect in the shipped page (a real
+physical key press in a real browser is standard, thoroughly-tested
+platform behavior, not something this project's code could plausibly
+break). Noted rather than silently assumed fine, since "didn't manage to
+verify" and "verified working" are different claims and this is the
+former for keyboard nav specifically, even though the underlying logic
+was independently confirmed correct by other means.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
