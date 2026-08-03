@@ -1,0 +1,55 @@
+# Story
+
+> Turn a working session into a readable story — not a video.
+
+Story watches a session (clicking through a feature, debugging an issue, a
+demo) and turns it into a structured, skimmable "story": ordered steps, each
+with a screenshot and a caption, exported as Markdown so it can be dropped
+straight into a PR, a ticket, or a repo's `/docs` folder. It's built to be
+driven by a human recording themselves **or by an AI coding agent** (e.g.
+Claude Code) narrating its own work through an MCP interface.
+
+## Status
+
+**Pre-Phase 0.** This repo currently holds the product doc only — no code
+yet. See [`docs/product/00-README.md`](docs/product/00-README.md) for the
+full write-up, and [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
+for the decisions that need to be made before engineering starts.
+
+## Why
+
+Explaining "what I did" today means choosing between a video (fast to
+record, painful to consume, not diffable) or a manual write-up (skimmable,
+but tedious enough that most people skip it). Story aims to be fast to
+produce *and* fast to read — and to be usable by an AI agent narrating its
+own reasoning, not just a human clicking through after the fact.
+
+See [`docs/product/01-vision-and-goals.md`](docs/product/01-vision-and-goals.md)
+for the full problem statement.
+
+## Documentation
+
+All product thinking lives in [`docs/product/`](docs/product/), read in this
+order:
+
+1. [Vision & goals](docs/product/01-vision-and-goals.md)
+2. [Users & personas](docs/product/02-users-and-personas.md)
+3. [Features (MVP / Phase 2 / Phase 3+)](docs/product/03-features.md)
+4. [Usage scenarios](docs/product/04-usage-scenarios.md)
+5. [Collaboration & sharing](docs/product/05-collaboration-and-sharing.md)
+6. [Editing & versioning](docs/product/06-editing-and-versioning.md)
+7. [Edge cases](docs/product/07-edge-cases.md)
+8. [Technical considerations](docs/product/08-technical-considerations.md)
+9. [Roadmap](docs/product/09-roadmap.md)
+10. [**Open questions**](docs/product/10-open-questions.md) — the decisions
+    that gate everything else
+
+## Contributing
+
+Not yet open for external contributions — the product direction is still
+being decided (see open questions above). Once Phase 0 starts, see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the branching model and PR process.
+
+## License
+
+[MIT](LICENSE)
