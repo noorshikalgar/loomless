@@ -13,8 +13,10 @@ Claude Code) narrating its own work through an MCP interface.
 
 **Pre-Phase 0.** This repo currently holds the product doc only — no code
 yet. See [`docs/product/00-README.md`](docs/product/00-README.md) for the
-full write-up, and [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
-for the decisions that need to be made before engineering starts.
+full write-up, [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
+for what's still undecided, and [`docs/product/11-decisions.md`](docs/product/11-decisions.md)
+for what's already resolved (capture engine: **Go**, accounts:
+**optional/local-first**, editing model: **mutable with activity log**).
 
 ## Why
 
