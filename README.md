@@ -46,6 +46,28 @@ order:
 10. [**Open questions**](docs/product/10-open-questions.md) — the decisions
     that gate everything else
 
+## Try it (Phase 0 — macOS only)
+
+The Phase 0 spike proves the core loop: record a session, capture
+window-scoped steps (not full-screen — see
+[`docs/product/11-decisions.md`](docs/product/11-decisions.md) #5), export
+to Markdown. No click-hooking, terminal capture, or agent/MCP interface yet
+— those are Phase 1/1.5.
+
+```bash
+go build -o story ./cmd/story
+./story record start my-first-story
+./story step "optional note describing this step"   # captures the frontmost window
+./story record stop
+./story export my-first-story
+```
+
+Output lands in `~/.story/sessions/my-first-story/`. First run will prompt
+for **Screen Recording** permission (System Settings → Privacy & Security)
+for whichever terminal app you're running it from — that's a one-time
+macOS system prompt, expected per
+[`docs/product/07-edge-cases.md`](docs/product/07-edge-cases.md).
+
 ## Contributing
 
 Not yet open for external contributions — the product direction is still
