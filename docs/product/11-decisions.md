@@ -50,6 +50,28 @@ visibility) from day one, even before sharing/accounts exist in Phase 3 —
 so the log has something to log retroactively instead of being bolted on
 later.
 
+## 5. Screenshot capture scope — **window-specific, not full-screen**
+
+Decided 2026-08-03. Every capture is scoped to a single window (the
+frontmost/active window, or an explicitly chosen one) rather than the whole
+display. Narrows the surface for accidental sensitive-data capture (other
+apps, other tabs, menu bar/notifications never appear), and makes the
+resulting screenshots more relevant per step. Element/region-level capture
+(cropping to a specific control, not just the window) is a stretch goal for
+the same spike — attempt it, but window-level is the acceptance bar for
+Phase 0, not element-level.
+
+Implementation note (macOS first, per platform-order default): use the
+built-in `screencapture -l <windowID>` rather than a full-display grab, with
+window ID resolved via `osascript`/System Events for the frontmost window,
+or from a `story windows list` picker for a specific one. No CGO/Accessibility
+global-hook dependency needed for this — keeps the Phase 0 spike buildable
+without extra OS permission prompts beyond Screen Recording.
+
+**Unblocks:** Phase 0 capture engine scope — see
+[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) for where this lands
+(`feature/phase-0-capture-engine`).
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
