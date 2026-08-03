@@ -11,12 +11,18 @@ Claude Code) narrating its own work through an MCP interface.
 
 ## Status
 
-**Pre-Phase 0.** This repo currently holds the product doc only — no code
-yet. See [`docs/product/00-README.md`](docs/product/00-README.md) for the
-full write-up, [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
+**Phase 1.5 (agent path) done, macOS only.** The human path (click-capture,
+terminal capture, secret-masking, Markdown export) and the agent path (MCP
+server) both work end to end. See
+[`docs/product/00-README.md`](docs/product/00-README.md) for the full
+product write-up, [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
 for what's still undecided, and [`docs/product/11-decisions.md`](docs/product/11-decisions.md)
-for what's already resolved (capture engine: **Go**, accounts:
-**optional/local-first**, editing model: **mutable with activity log**).
+for what's already resolved and why (capture engine: **Go**; accounts:
+**optional/local-first**; editing model: **mutable with activity log**;
+screenshots: **window-scoped, not full-screen**; terminal capture: **explicit
+`story run` wrapper, not a full shell hook**; secrets: **pattern-masked at
+capture time**). Not done: cross-platform (macOS only right now), PDF/slide
+export, sharing — all later phases.
 
 ## Why
 
@@ -53,7 +59,7 @@ listen-only macOS event tap — it observes, never intercepts) and captures a
 window-scoped, click-highlighted screenshot per click (not full-screen —
 see [`docs/product/11-decisions.md`](docs/product/11-decisions.md) #5). Add
 notes without a click via `story step`, or capture a command + its output
-via `story run`. No agent/MCP interface yet — that's next.
+via `story run`.
 
 ```bash
 go build -o story ./cmd/story
@@ -80,6 +86,22 @@ Recording** (to take the screenshots) — System Settings → Privacy &
 Security, granted to whichever terminal app you're running it from. Both
 are one-time macOS system prompts, expected per
 [`docs/product/07-edge-cases.md`](docs/product/07-edge-cases.md).
+
+## Agent-driven capture (MCP)
+
+`story mcp` runs an MCP server (stdio) exposing `start_recording`,
+`capture_step`, `run_command`, `stop_recording`, `generate_story`, and
+`list_windows` — so an agent like Claude Code can narrate its own work
+instead of a human clicking through it (Scenario B in
+[`docs/product/04-usage-scenarios.md`](docs/product/04-usage-scenarios.md)).
+Same session data, same masking, same CLI underneath — see decision #8 in
+[`docs/product/11-decisions.md`](docs/product/11-decisions.md).
+
+To use it from Claude Code:
+
+```bash
+claude mcp add story -- /path/to/story mcp
+```
 
 ## Contributing
 

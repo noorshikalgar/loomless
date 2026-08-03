@@ -130,6 +130,43 @@ Each step records *which* rules fired (`Masked: []string`, rule names
 only, never matched content) — visible in the CLI output and in
 `session.json` — so masking is never silent.
 
+## 8. MCP tool surface — the doc's 4, plus 2
+
+Decided 2026-08-03 (Phase 1.5, per `09-roadmap.md`). `story mcp` runs an
+MCP server over stdio exposing `start_recording`, `capture_step`,
+`stop_recording`, `generate_story` — the exact 4 named in
+`03-features.md`/`04-usage-scenarios.md` Scenario B — plus two more:
+
+- `run_command`: the agent-facing equivalent of `story run`. Scenario B's
+  own example ("ran the failing test to see the exact error", "re-ran the
+  test suite, all green") is literally an agent running commands and
+  wanting them captured — without this tool the agent would have to use
+  its own separate shell tool and then manually describe the command via
+  `capture_step`'s note, losing the actual output. Included because the
+  scenario the doc describes needs it, not because it was asked for by
+  name.
+- `list_windows`: lets an agent sanity-check what a capture would resolve
+  as the frontmost window before calling it — cheap, read-only, avoids
+  capturing the wrong window blind.
+
+Implementation: `cmd/story/mcp.go` + a new `internal/engine` package.
+Business logic (session lifecycle, click-daemon start/stop, step capture,
+command execution, export) moved out of `cmd/story/main.go` into
+`internal/engine`, shared unchanged between the CLI and the MCP server —
+per `08-technical-considerations.md`'s "thin wrapper around the same
+engine's internal API." One hard invariant enforced there: nothing in
+`internal/engine` writes to `os.Stdout` — the MCP stdio transport uses
+stdout as the protocol stream, so a stray print would corrupt it. The
+CLI's live terminal echo for `story run` is a tee the CLI adds on top
+(`engine.RunCommand` takes optional tee writers, nil from the MCP path).
+
+Verified against the real SDK client (`github.com/modelcontextprotocol/
+go-sdk`, not just manual JSON-RPC): connected, listed all 6 tools, drove a
+full start_recording → capture_step → run_command → list_windows →
+stop_recording → generate_story sequence, and confirmed a fake secret
+in `run_command`'s output came back masked in both the tool result and
+the final generated Markdown.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
