@@ -65,9 +65,11 @@ func runMCPServer(ctx context.Context) error {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "generate_story",
-		Description: "Render a session to Markdown and return its content " +
-			"directly — include it in your final response, or write it into " +
-			"the PR/ticket you're producing.",
+		Description: "Render a session, default format Markdown. Markdown's " +
+			"content is returned directly — include it in your final response, " +
+			"or write it into the PR/ticket you're producing. PDF is written to " +
+			"disk only (content isn't returned inline); use it when the human " +
+			"wants a shareable file rather than inline text.",
 	}, generateStoryTool)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -157,23 +159,35 @@ func stopRecordingTool(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*
 }
 
 type generateStoryIn struct {
-	Name string `json:"name" jsonschema:"The session name to render (as passed to start_recording)."`
+	Name   string `json:"name" jsonschema:"The session name to render (as passed to start_recording)."`
+	Format string `json:"format,omitempty" jsonschema:"'markdown' (default) or 'pdf'."`
 }
 
 type generateStoryOut struct {
 	Path    string `json:"path"`
-	Content string `json:"content" jsonschema:"The rendered Markdown — include this directly in your response."`
+	Content string `json:"content,omitempty" jsonschema:"The rendered Markdown — include this directly in your response. Empty for PDF."`
 }
 
 func generateStoryTool(_ context.Context, _ *mcp.CallToolRequest, in generateStoryIn) (*mcp.CallToolResult, generateStoryOut, error) {
 	if in.Name == "" {
 		return nil, generateStoryOut{}, fmt.Errorf("name is required")
 	}
-	path, content, err := engine.ExportMarkdown(in.Name)
-	if err != nil {
-		return nil, generateStoryOut{}, err
+	switch in.Format {
+	case "", "markdown", "md":
+		path, content, err := engine.ExportMarkdown(in.Name)
+		if err != nil {
+			return nil, generateStoryOut{}, err
+		}
+		return nil, generateStoryOut{Path: path, Content: content}, nil
+	case "pdf":
+		path, err := engine.ExportPDF(in.Name)
+		if err != nil {
+			return nil, generateStoryOut{}, err
+		}
+		return nil, generateStoryOut{Path: path}, nil
+	default:
+		return nil, generateStoryOut{}, fmt.Errorf("unknown format %q (want markdown or pdf)", in.Format)
 	}
-	return nil, generateStoryOut{Path: path, Content: content}, nil
 }
 
 type windowInfoOut struct {

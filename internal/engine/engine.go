@@ -192,6 +192,26 @@ func ExportMarkdown(name string) (path, content string, err error) {
 	return outPath, md, nil
 }
 
+// ExportPDF renders a session to PDF and writes it alongside the session.
+// Unlike ExportMarkdown, the rendered bytes aren't returned as content —
+// a PDF isn't something to inline into a chat response the way Markdown
+// text is; the path is the useful part.
+func ExportPDF(name string) (path string, err error) {
+	s, dir, err := session.Load(name)
+	if err != nil {
+		return "", err
+	}
+	data, err := export.PDF(s, dir)
+	if err != nil {
+		return "", err
+	}
+	outPath := dir + "/" + name + ".pdf"
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return "", fmt.Errorf("write export: %w", err)
+	}
+	return outPath, nil
+}
+
 // startClickDaemon relaunches the current executable in the background to
 // run the global click listener, since holding a CFRunLoop open means that
 // process can't also be the short-lived command that started the session.

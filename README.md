@@ -11,10 +11,10 @@ Claude Code) narrating its own work through an MCP interface.
 
 ## Status
 
-**Phase 1.5 (agent path) done, first Phase 2 item done. macOS: full
+**Phase 1.5 (agent path) done, two Phase 2 items done. macOS: full
 support. Linux: window/terminal capture works (X11 only), automatic
 click-capture doesn't yet.** The human path (click-capture, terminal
-capture, secret-masking, idle-timeout nudge, Markdown export) and the
+capture, secret-masking, idle-timeout nudge, Markdown/PDF export) and the
 agent path (MCP server) both work end to end on macOS. See
 [`docs/product/00-README.md`](docs/product/00-README.md) for the full
 product write-up, [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
@@ -25,8 +25,9 @@ screenshots: **window-scoped, not full-screen**; terminal capture: **explicit
 `story run` wrapper, not a full shell hook**; secrets: **pattern-masked at
 capture time**; Linux: **X11 via standard tools, no click-capture yet**;
 forgotten recordings: **desktop notification after 20min idle, not
-auto-stop**). Not done: local editor, auto-captions, PDF/slide export,
-Windows, Wayland, sharing — all later phases.
+auto-stop**; PDF: **rendered directly from session data, pure Go, no
+headless-browser dependency**). Not done: local editor, auto-captions,
+slide-deck export, Windows, Wayland, sharing — all later phases.
 
 ## Why
 
@@ -74,7 +75,8 @@ go build -o story ./cmd/story
 ./story step "optional note, no click needed"
 ./story run -- go test ./...     # captures the command + its output as a step
 ./story record stop
-./story export my-first-story
+./story export my-first-story              # Markdown (default)
+./story export my-first-story --format pdf # or a PDF, screenshots embedded
 ```
 
 **Linux (X11) dependencies:** `xdotool`, `wmctrl`, `xprop` (usually

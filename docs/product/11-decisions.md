@@ -330,6 +330,50 @@ because the fast env-var-driven test used seconds-scale durations. Fixed
 by rounding to the nearest second instead, which reads fine at both the
 test scale and the real 20-minutes-plus scale.
 
+## 12. PDF export — direct session-to-PDF, pure Go, ASCII-sanitized text
+
+Decided 2026-08-03 (second Phase 2 item). `story export <name> --format
+pdf` and the MCP `generate_story` tool's `format: "pdf"` render straight
+from `session.Session` to PDF via `internal/export/pdf.go`, using
+[`github.com/go-pdf/fpdf`](https://github.com/go-pdf/fpdf) — a pure-Go PDF
+library, no cgo, no external binary dependency (unlike the "headless
+Chromium" option `08-technical-considerations.md` floated). Chosen over
+converting the rendered Markdown to PDF: converting Markdown would need
+a Markdown-to-PDF pipeline of its own (and likely the same headless-browser
+dependency this avoids), whereas rendering directly from the structured
+`Session` data — the same source `export.Markdown` already reads — needed
+nothing extra.
+
+**Text encoding tradeoff, deliberate:** fpdf's core fonts (Helvetica,
+Courier) aren't UTF-8 aware without either an embedded TTF file or a
+bundled codepage descriptor (`.map` file) for its Unicode-translator path
+— both are assets this project would have to ship. Rather than add a font
+dependency for what's realistically a handful of characters (em dashes,
+smart quotes, the masking placeholder's guillemets `«»`), `safe()` maps
+the common ones to ASCII equivalents (`—`→`--`, `«»`→`<<>>`, etc.) and
+replaces anything else non-ASCII with `?`. Good enough for this project's
+own text (comments, notes, captions); would need revisiting if this ever
+needs to render non-Latin scripts.
+
+Screenshots are embedded directly (read from `dir/step.ImageFile`, not
+just linked the way Markdown does it — PDF has no equivalent of a relative
+link to another file), scaled to the page's usable width preserving aspect
+ratio, downscaled further if that would exceed a full page's height.
+Terminal steps get the same masked `Output`/`Command` fields the Markdown
+exporter uses — masking (decision #7) runs once, at capture time, and
+every export format inherits it for free.
+
+Verified visually on both platforms, not just "the command exits 0": a
+real session (a note-and-screenshot step plus a terminal step with a fake
+secret) exported to PDF and read directly (this tool renders PDF pages)
+on macOS — confirmed the title, wrapped note text, real embedded
+screenshot at correct proportions, and `«masked»`→`<<masked>>` all
+rendered correctly, not garbled. Repeated the terminal-step half of that
+in the same Linux/X11 container used for decisions #10/#11 — confirmed an
+identical result from the identical pure-Go code path (no OS-specific
+code exists in `pdf.go`, so this was mostly confirming that expectation
+rather than expecting a surprise, but confirmed rather than assumed).
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

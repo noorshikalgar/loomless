@@ -70,7 +70,7 @@ Usage:
   story step ["note"]           Manually capture the frontmost window as a step
   story run [--] <cmd> [args]   Run a command, capture it + its output as a step
   story windows list            List candidate windows to capture
-  story export <name>           Render a session to Markdown
+  story export <name> [--format md|pdf]   Render a session (default: md)
   story mcp                     Run the MCP server (stdio) for agent-driven capture
 
 Session data lives under ~/.story/sessions/<name>/.`)
@@ -217,14 +217,43 @@ func cmdWindows(args []string) error {
 }
 
 func cmdExport(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: story export <name>")
+	name := ""
+	format := "md"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--format":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--format needs a value (md or pdf)")
+			}
+			format = args[i+1]
+			i++
+		default:
+			if name != "" {
+				return fmt.Errorf("usage: story export <name> [--format md|pdf]")
+			}
+			name = args[i]
+		}
 	}
-	path, _, err := engine.ExportMarkdown(args[0])
-	if err != nil {
-		return err
+	if name == "" {
+		return fmt.Errorf("usage: story export <name> [--format md|pdf]")
 	}
-	fmt.Println(path)
+
+	switch format {
+	case "md", "markdown":
+		path, _, err := engine.ExportMarkdown(name)
+		if err != nil {
+			return err
+		}
+		fmt.Println(path)
+	case "pdf":
+		path, err := engine.ExportPDF(name)
+		if err != nil {
+			return err
+		}
+		fmt.Println(path)
+	default:
+		return fmt.Errorf("unknown format %q (want md or pdf)", format)
+	}
 	return nil
 }
 
