@@ -488,6 +488,40 @@ actually make the covered content unrecoverable, not just visually hide
 it) that it deserves its own focused pass rather than being squeezed in
 here. Flagged as a follow-up task, not silently dropped.
 
+## 15. Click-highlight toggle
+
+Decided 2026-08-03, in response to a direct user question ("can the click
+highlight be configurable, if user wants it can else remove"). The
+automatic red-ring annotation on click-captured screenshots (decision #3
+in the original Phase 1 work) was previously always-on with no way to
+turn it off. `story record start <name> --no-highlight` and the MCP
+`start_recording` tool's `no_highlight: true` disable it — the daemon
+still captures a screenshot per click, just without the ring drawn on it.
+Default stays on (opt out, not opt in), since the annotation is more
+often useful than not for the primary bug-repro/PR-review use cases.
+
+Plumbing: the click daemon is a separate relaunched process (`story
+__click-daemon <name>`), so the flag has to travel as a real process
+argument, not just an in-memory bool — `engine.startBackgroundProcess`
+gained a variadic `extraArgs` parameter for this, reused by
+`startClickDaemon` to append `--no-highlight` when needed (the idle
+watchdog doesn't need any extra args, so its call site is unchanged).
+
+**Verified the plumbing end-to-end, not just that it compiles:** started
+one session with `--no-highlight` and one without, then inspected the
+actual running daemon processes' command lines (`ps -ax -o
+pid,command`) — confirmed the flag reaches the spawned process exactly
+when expected and is absent otherwise. What's *not* verified end-to-end:
+whether a real click, with the flag set, actually produces an
+un-annotated screenshot — that needs a real OS-level click firing through
+the event tap, which (same limitation noted when click-capture was first
+built) can't be synthesized in this environment. The conditional itself
+(`if highlightClicks { ...capture.Highlight... }`) is simple and was
+reviewed, and `capture.Highlight` itself was already thoroughly verified
+in the original click-capture work — but "the flag reaches the process"
+and "a real click respects the flag" are different claims, and only the
+first is confirmed here.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

@@ -74,7 +74,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `story — turn a working session into a readable story
 
 Usage:
-  story record start <name>     Begin a session (auto-captures clicks)
+  story record start <name> [--no-highlight]   Begin a session (auto-captures clicks)
   story record stop             Finish the active session
   story step ["note"]           Manually capture the frontmost window as a step
   story run [--] <cmd> [args]   Run a command, capture it + its output as a step
@@ -101,11 +101,23 @@ func cmdRecord(args []string) error {
 }
 
 func recordStart(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: story record start <name>")
+	name := ""
+	highlightClicks := true
+	for _, a := range args {
+		if a == "--no-highlight" {
+			highlightClicks = false
+			continue
+		}
+		if name != "" {
+			return fmt.Errorf("usage: story record start <name> [--no-highlight]")
+		}
+		name = a
 	}
-	name := args[0]
-	dir, watching, warning, err := engine.StartRecording(name)
+	if name == "" {
+		return fmt.Errorf("usage: story record start <name> [--no-highlight]")
+	}
+
+	dir, watching, warning, err := engine.StartRecording(name, highlightClicks)
 	if err != nil {
 		return err
 	}
@@ -115,7 +127,11 @@ func recordStart(args []string) error {
 		fmt.Fprintln(os.Stderr, "story: you can still use 'story step \"note\"' to capture manually")
 		return nil
 	}
-	fmt.Println("Watching clicks — use 'story step \"note\"' to add notes without a click.")
+	if highlightClicks {
+		fmt.Println("Watching clicks — use 'story step \"note\"' to add notes without a click.")
+	} else {
+		fmt.Println("Watching clicks (highlight ring disabled) — use 'story step \"note\"' to add notes without a click.")
+	}
 	return nil
 }
 
@@ -132,9 +148,15 @@ func recordStop() error {
 // see engine.RunClickDaemon.
 func runClickDaemon(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story __click-daemon <session-name>")
+		return fmt.Errorf("usage: story __click-daemon <session-name> [--no-highlight]")
 	}
-	return engine.RunClickDaemon(args[0], func(format string, a ...any) {
+	highlightClicks := true
+	for _, a := range args[1:] {
+		if a == "--no-highlight" {
+			highlightClicks = false
+		}
+	}
+	return engine.RunClickDaemon(args[0], highlightClicks, func(format string, a ...any) {
 		fmt.Printf(format+"\n", a...)
 	})
 }

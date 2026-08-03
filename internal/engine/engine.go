@@ -46,11 +46,13 @@ func clamp(v, min, max float64) float64 {
 }
 
 // StartRecording creates a session and, best-effort, starts the background
-// click-capture daemon for it. A failure to start click-watching (e.g. no
-// Accessibility permission) is not a fatal error — it's returned as
-// warning text so the caller can surface it, while the session itself is
-// still usable via manual capture.
-func StartRecording(name string) (dir string, watching bool, warning string, err error) {
+// click-capture daemon for it. highlightClicks controls whether captured
+// click screenshots get the red-ring annotation (decision #15) — some
+// users/workflows want the raw screenshot instead. A failure to start
+// click-watching (e.g. no Accessibility permission) is not a fatal error
+// — it's returned as warning text so the caller can surface it, while the
+// session itself is still usable via manual capture.
+func StartRecording(name string, highlightClicks bool) (dir string, watching bool, warning string, err error) {
 	_, dir, err = session.Create(name)
 	if err != nil {
 		return "", false, "", err
@@ -61,7 +63,7 @@ func StartRecording(name string) (dir string, watching bool, warning string, err
 	// starting a recording.
 	startIdleWatchdog(name, dir)
 
-	if werr := startClickDaemon(name, dir); werr != nil {
+	if werr := startClickDaemon(name, dir, highlightClicks); werr != nil {
 		return dir, false, werr.Error(), nil
 	}
 	return dir, true, "", nil
@@ -234,8 +236,12 @@ func ExportSlides(name string) (path string, err error) {
 // startClickDaemon relaunches the current executable in the background to
 // run the global click listener, since holding a CFRunLoop open means that
 // process can't also be the short-lived command that started the session.
-func startClickDaemon(name, dir string) error {
-	if err := startBackgroundProcess("__click-daemon", name, session.DaemonPIDPath(dir), session.DaemonLogPath(dir)); err != nil {
+func startClickDaemon(name, dir string, highlightClicks bool) error {
+	var extraArgs []string
+	if !highlightClicks {
+		extraArgs = append(extraArgs, "--no-highlight")
+	}
+	if err := startBackgroundProcess("__click-daemon", name, session.DaemonPIDPath(dir), session.DaemonLogPath(dir), extraArgs...); err != nil {
 		return err
 	}
 	// Give the daemon a moment to report whether the event tap actually
@@ -276,7 +282,7 @@ func stopIdleWatchdog(dir string) {
 // this process exiting), with stdout/stderr redirected to logPath and its
 // PID recorded at pidPath so a later stopBackgroundProcess call (from a
 // different, later process — "record stop") can find and signal it.
-func startBackgroundProcess(subcommand, name, pidPath, logPath string) error {
+func startBackgroundProcess(subcommand, name, pidPath, logPath string, extraArgs ...string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)
@@ -287,7 +293,7 @@ func startBackgroundProcess(subcommand, name, pidPath, logPath string) error {
 		return fmt.Errorf("create log: %w", err)
 	}
 
-	cmd := exec.Command(exe, subcommand, name)
+	cmd := exec.Command(exe, append([]string{subcommand, name}, extraArgs...)...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -357,7 +363,7 @@ func findFailureLine(path string) (line string, found bool) {
 // window as a step. Runs until SIGTERM (sent by stopClickDaemon). Logging
 // goes through the provided logf so the CLI can direct it to the daemon's
 // log file as before.
-func RunClickDaemon(name string, logf func(format string, args ...any)) error {
+func RunClickDaemon(name string, highlightClicks bool, logf func(format string, args ...any)) error {
 	// CFRunLoopRun must run on the thread that installed the tap.
 	runtime.LockOSThread()
 
@@ -383,13 +389,15 @@ func RunClickDaemon(name string, logf func(format string, args ...any)) error {
 			windowApp, windowTitle = win.App, win.Title
 			shot, serr := capture.Screenshot(win) // best-effort; missing Screen Recording permission shouldn't kill the daemon
 			if serr == nil {
-				// Window may have moved/resized between the click and this
-				// Frontmost() lookup; clamp so the marker stays on-image
-				// instead of drawing off the edge.
-				relX := clamp(x-win.X, 0, win.W)
-				relY := clamp(y-win.Y, 0, win.H)
-				if annotated, aerr := capture.Highlight(shot, relX, relY, win.W, win.H); aerr == nil {
-					shot = annotated
+				if highlightClicks {
+					// Window may have moved/resized between the click and
+					// this Frontmost() lookup; clamp so the marker stays
+					// on-image instead of drawing off the edge.
+					relX := clamp(x-win.X, 0, win.W)
+					relY := clamp(y-win.Y, 0, win.H)
+					if annotated, aerr := capture.Highlight(shot, relX, relY, win.W, win.H); aerr == nil {
+						shot = annotated
+					}
 				}
 				image = shot
 			}
