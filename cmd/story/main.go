@@ -6,7 +6,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -48,6 +51,8 @@ func main() {
 		err = cmdRecord(os.Args[2:])
 	case "step":
 		err = cmdStep(os.Args[2:])
+	case "run":
+		err = cmdRun(os.Args[2:]) // exits the process itself on success paths; err is only non-nil for story-level failures
 	case "windows":
 		err = cmdWindows(os.Args[2:])
 	case "export":
@@ -77,6 +82,7 @@ Usage:
   story record start <name>     Begin a session (auto-captures clicks)
   story record stop             Finish the active session
   story step ["note"]           Manually capture the frontmost window as a step
+  story run [--] <cmd> [args]   Run a command, capture it + its output as a step
   story windows list            List candidate windows to capture
   story export <name>           Render a session to Markdown
 
@@ -301,6 +307,55 @@ func cmdStep(args []string) error {
 		fmt.Printf(" (%s — %s)", windowApp, windowTitle)
 	}
 	fmt.Println()
+	return nil
+}
+
+// cmdRun implements "story run [--] <command> [args...]": the explicit,
+// per-command terminal capture wrapper (decision #6 in
+// docs/product/11-decisions.md — not a full-shell-session hook). The
+// command runs exactly as given, no shell interpretation, so pipes/globs
+// need an explicit `sh -c "..."` if the caller wants them.
+func cmdRun(args []string) error {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) < 1 {
+		return fmt.Errorf("usage: story run [--] <command> [args...]")
+	}
+
+	s, _, err := session.Current()
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
+	var buf bytes.Buffer
+	// Tee to the real terminal too — this should behave like running the
+	// command directly, not swallow its output while capturing.
+	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
+	cmd.Stdin = os.Stdin
+
+	runErr := cmd.Run()
+	exitCode := 0
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return fmt.Errorf("run %q: %w", strings.Join(args, " "), runErr)
+		}
+	}
+
+	step, err := session.AppendTerminalStep(s.Name, strings.Join(args, " "), buf.Bytes(), exitCode)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "story: step %d captured (exit %d)\n", step.Index, exitCode)
+
+	// Propagate the wrapped command's own exit code so "story run --
+	// make test && story record stop" chains the way a caller expects.
+	os.Exit(exitCode)
 	return nil
 }
 

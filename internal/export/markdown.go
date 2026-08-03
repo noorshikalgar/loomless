@@ -29,6 +29,24 @@ func Markdown(s *session.Session) string {
 
 	for _, step := range s.Steps {
 		fmt.Fprintf(&b, "## Step %d\n\n", step.Index)
+
+		if step.Command != "" {
+			fmt.Fprintf(&b, "```bash\n$ %s\n```\n\n", step.Command)
+			if step.Output != "" {
+				fmt.Fprintf(&b, "```\n%s\n```\n\n", step.Output)
+			}
+			if step.ExitCode != nil && *step.ExitCode != 0 {
+				fmt.Fprintf(&b, "_Exited %d._", *step.ExitCode)
+				if step.OutputFile != "" {
+					fmt.Fprintf(&b, " Full output: [%s](%s).", step.OutputFile, step.OutputFile)
+				}
+				b.WriteString("\n\n")
+			} else if step.OutputFile != "" && strings.Contains(step.Output, "lines omitted") {
+				fmt.Fprintf(&b, "_Full output: [%s](%s)._\n\n", step.OutputFile, step.OutputFile)
+			}
+			continue
+		}
+
 		if step.WindowApp != "" {
 			fmt.Fprintf(&b, "**Window:** %s", step.WindowApp)
 			if step.WindowTitle != "" {

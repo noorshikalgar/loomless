@@ -49,20 +49,25 @@ order:
 ## Try it (macOS only)
 
 The core loop: `record start` watches your clicks automatically (a
-listen-only macOS event tap — it observes, never intercepts) and captures
-a window-scoped screenshot per click (not full-screen — see
-[`docs/product/11-decisions.md`](docs/product/11-decisions.md) #5). Add
-notes without a click via `story step`. No terminal capture, annotations,
-or agent/MCP interface yet — those are next.
+listen-only macOS event tap — it observes, never intercepts) and captures a
+window-scoped, click-highlighted screenshot per click (not full-screen —
+see [`docs/product/11-decisions.md`](docs/product/11-decisions.md) #5). Add
+notes without a click via `story step`, or capture a command + its output
+via `story run`. No agent/MCP interface yet — that's next.
 
 ```bash
 go build -o story ./cmd/story
 ./story record start my-first-story
 # click around normally — each click is captured automatically
 ./story step "optional note, no click needed"
+./story run -- go test ./...     # captures the command + its output as a step
 ./story record stop
 ./story export my-first-story
 ```
+
+`story run`'s captured output is **not secret-masked yet** — see decision
+#6 in [`docs/product/11-decisions.md`](docs/product/11-decisions.md).
+Don't run commands that print secrets during a recording until that lands.
 
 Output lands in `~/.story/sessions/my-first-story/`. First run prompts for
 **Accessibility** (to watch clicks and resolve window info) and **Screen

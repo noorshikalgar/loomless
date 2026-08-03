@@ -72,6 +72,32 @@ without extra OS permission prompts beyond Screen Recording.
 [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) for where this lands
 (`feature/phase-0-capture-engine`).
 
+## 6. Terminal capture scope — **explicit wrapper, not full shell session**
+
+Decided 2026-08-03 (resolves open question #8). `story run -- <command>`
+runs one command as a subprocess and captures its output as a step —
+it does not attach to or tee the user's actual interactive shell.
+
+Consistent with every capture-surface decision so far (window-scoped not
+full-screen, listen-only click tap, optional accounts): default to the
+narrower, explicit surface. A full-session shell wrapper would capture
+every command the user runs for the entire recording — including ones
+that have nothing to do with the story and are more likely to contain
+secrets never meant for the output. An explicit per-command wrapper only
+captures what's deliberately routed through it, at the cost of the user
+needing to type `story run --` in front of commands they want captured.
+
+Long output is truncated to a head/tail preview in the rendered story
+(per `07-edge-cases.md`); full raw output is always saved alongside the
+session so nothing is silently lost, just not inlined.
+
+**Known gap, not yet closed:** captured command output is **not**
+secret-masked yet (open question #5 / Phase 1 roadmap item, tracked
+separately) — anything a command prints to stdout/stderr, including
+secrets, lands on disk as-is for now. Masking is queued as the very next
+piece of work specifically because terminal capture needed to exist first
+for it to have real output to operate on.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
