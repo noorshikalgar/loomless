@@ -278,6 +278,58 @@ was one specific X11/WM/tool-version combination (Debian bookworm's
 xdotool/wmctrl/maim, fluxbox) — behavior on other distros or window
 managers isn't guaranteed identical.
 
+## 11. Idle-timeout: separate watchdog process, desktop notification, not auto-stop
+
+Decided 2026-08-03 (first Phase 2 item — the "forgotten recording" edge
+case in `07-edge-cases.md`). `record start` now also launches a second
+background process (`internal/engine.RunIdleWatchdog`, same
+relaunch-and-detach pattern as the click daemon, refactored into a shared
+`startBackgroundProcess`/`stopBackgroundProcess` helper pair) that checks
+the session's last-activity time and sends a desktop notification once it
+exceeds a threshold (default 20 minutes, re-notifying at most once per
+threshold window rather than spamming every check) — a **soft nudge**,
+matching the edge-cases doc's own wording ("still recording — stop?"), not
+an automatic stop. Auto-stopping was considered and rejected: silently
+ending a recording out from under someone who stepped away mid-task (a
+meeting, a phone call) would be a worse surprise than a forgotten
+recording burning some extra disk space.
+
+Deliberately its **own** process/PID, not folded into the click daemon:
+the click daemon doesn't exist at all on platforms/permission-states where
+click-capture isn't available (Linux today, or macOS without Accessibility
+granted) — see decision #10 — and the idle nudge is exactly as useful
+there, arguably more so, since manual-only capture is easier to forget
+about mid-task than click-driven capture.
+
+Notification delivery (`internal/notify`) is its own tiny package,
+platform-specific and best-effort: `osascript ... display notification` on
+macOS, `notify-send` on Linux, a no-op elsewhere. A failed/missing
+notification backend is logged, not fatal — the watchdog keeps running
+either way.
+
+Both the warn-after threshold and the check interval are overridable via
+`STORY_IDLE_WARN_AFTER`/`STORY_IDLE_CHECK_INTERVAL` env vars (Go duration
+strings, e.g. `5m`) — added for testability (verifying a 20-minute default
+without actually waiting 20 minutes) but just as legitimately useful for a
+real user who wants a shorter or longer threshold than the default.
+
+Verified end to end on **both** supported platforms, not just macOS:
+locally with the env vars set to a few seconds — confirmed the watchdog
+starts, notifies exactly once per idle window (not every check tick),
+and shuts down cleanly (PID file removed, "stopped" logged) on `record
+stop`; and inside the same Linux/X11 container used for decision #10 —
+confirmed the same start/notify-attempt/stop lifecycle, including that a
+missing `notify-send` (not installed in the minimal test container) fails
+the notification attempt gracefully without taking down the watchdog or
+the recording.
+
+Caught during testing: the first version rounded the idle duration to the
+nearest **minute** for the log/notification text, which made anything
+under 30 seconds display as "0s" — obviously wrong, and only obvious
+because the fast env-var-driven test used seconds-scale durations. Fixed
+by rounding to the nearest second instead, which reads fine at both the
+test scale and the real 20-minutes-plus scale.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

@@ -11,10 +11,11 @@ Claude Code) narrating its own work through an MCP interface.
 
 ## Status
 
-**Phase 1.5 (agent path) done. macOS: full support. Linux: window/terminal
-capture works (X11 only), automatic click-capture doesn't yet.** The human
-path (click-capture, terminal capture, secret-masking, Markdown export) and
-the agent path (MCP server) both work end to end on macOS. See
+**Phase 1.5 (agent path) done, first Phase 2 item done. macOS: full
+support. Linux: window/terminal capture works (X11 only), automatic
+click-capture doesn't yet.** The human path (click-capture, terminal
+capture, secret-masking, idle-timeout nudge, Markdown export) and the
+agent path (MCP server) both work end to end on macOS. See
 [`docs/product/00-README.md`](docs/product/00-README.md) for the full
 product write-up, [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
 for what's still undecided, and [`docs/product/11-decisions.md`](docs/product/11-decisions.md)
@@ -22,8 +23,10 @@ for what's already resolved and why (capture engine: **Go**; accounts:
 **optional/local-first**; editing model: **mutable with activity log**;
 screenshots: **window-scoped, not full-screen**; terminal capture: **explicit
 `story run` wrapper, not a full shell hook**; secrets: **pattern-masked at
-capture time**; Linux: **X11 via standard tools, no click-capture yet**).
-Not done: Windows, Wayland, PDF/slide export, sharing — all later phases.
+capture time**; Linux: **X11 via standard tools, no click-capture yet**;
+forgotten recordings: **desktop notification after 20min idle, not
+auto-stop**). Not done: local editor, auto-captions, PDF/slide export,
+Windows, Wayland, sharing — all later phases.
 
 ## Why
 
@@ -78,6 +81,11 @@ go build -o story ./cmd/story
 preinstalled), and [`maim`](https://github.com/naelstrof/maim) for
 screenshots — e.g. `apt install xdotool wmctrl x11-utils maim`. Wayland
 isn't supported (these are all X11-protocol tools).
+
+**Forgot a recording was running?** After ~20 minutes of no activity
+(`story step`/`story run`/clicks), you'll get a desktop notification
+nudging you to stop it — it never auto-stops for you (see decision #11 in
+[`docs/product/11-decisions.md`](docs/product/11-decisions.md)).
 
 Notes, window titles, and `story run` commands/output are pattern-matched
 for common secret shapes (API keys, tokens, `password=...`-style

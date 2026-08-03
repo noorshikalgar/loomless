@@ -43,6 +43,10 @@ func main() {
 		// Internal: relaunched by "record start" as a detached background
 		// process. Not part of the public CLI surface.
 		err = runClickDaemon(os.Args[2:])
+	case "__idle-watchdog":
+		// Internal: same relaunch pattern as __click-daemon, see
+		// internal/engine.RunIdleWatchdog.
+		err = runIdleWatchdog(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -121,6 +125,17 @@ func runClickDaemon(args []string) error {
 		return fmt.Errorf("usage: story __click-daemon <session-name>")
 	}
 	return engine.RunClickDaemon(args[0], func(format string, a ...any) {
+		fmt.Printf(format+"\n", a...)
+	})
+}
+
+// runIdleWatchdog is the "__idle-watchdog" hidden subcommand's entrypoint
+// — see engine.RunIdleWatchdog.
+func runIdleWatchdog(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: story __idle-watchdog <session-name>")
+	}
+	return engine.RunIdleWatchdog(args[0], func(format string, a ...any) {
 		fmt.Printf(format+"\n", a...)
 	})
 }

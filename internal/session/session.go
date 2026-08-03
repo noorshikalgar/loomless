@@ -94,6 +94,20 @@ func DaemonLogPath(dir string) string {
 	return filepath.Join(dir, "daemon.log")
 }
 
+// IdleWatchdogPIDPath and IdleWatchdogLogPath are the same pattern as
+// DaemonPIDPath/DaemonLogPath, for the separate idle-timeout watchdog
+// process (internal/engine's startIdleWatchdog) — kept as its own
+// process/PID rather than folded into the click daemon so the idle nudge
+// still works even on platforms/permission states where click-capture
+// itself isn't available (e.g. Linux — see decision #10).
+func IdleWatchdogPIDPath(dir string) string {
+	return filepath.Join(dir, "idle-watchdog.pid")
+}
+
+func IdleWatchdogLogPath(dir string) string {
+	return filepath.Join(dir, "idle-watchdog.log")
+}
+
 // currentPath points at the session name that "story step" / "story record
 // stop" act on when no name is given explicitly.
 func currentPath() (string, error) {

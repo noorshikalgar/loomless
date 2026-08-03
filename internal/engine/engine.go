@@ -27,6 +27,7 @@ import (
 
 	"github.com/noorshikalgar/story/internal/capture"
 	"github.com/noorshikalgar/story/internal/export"
+	"github.com/noorshikalgar/story/internal/notify"
 	"github.com/noorshikalgar/story/internal/session"
 )
 
@@ -54,20 +55,27 @@ func StartRecording(name string) (dir string, watching bool, warning string, err
 	if err != nil {
 		return "", false, "", err
 	}
+	// Independent of click-capture: runs (and is useful) even where
+	// click-capture isn't available at all, e.g. Linux — see decision #10.
+	// Best-effort, non-fatal — losing the idle nudge shouldn't block
+	// starting a recording.
+	startIdleWatchdog(name, dir)
+
 	if werr := startClickDaemon(name, dir); werr != nil {
 		return dir, false, werr.Error(), nil
 	}
 	return dir, true, "", nil
 }
 
-// StopRecording halts the click daemon (if running) for the current
-// session and marks it finished.
+// StopRecording halts the click daemon and idle watchdog (if running) for
+// the current session and marks it finished.
 func StopRecording() (*session.Session, error) {
 	s, dir, err := session.Current()
 	if err != nil {
 		return nil, err
 	}
 	stopClickDaemon(dir)
+	stopIdleWatchdog(dir)
 
 	// Reload: the daemon may have appended steps after our snapshot above.
 	s, dir, err = session.Load(s.Name)
@@ -82,17 +90,17 @@ func StopRecording() (*session.Session, error) {
 
 // CaptureStep captures the frontmost window (best-effort) as a step on the
 // current session, with an optional note. Used by both "story step" and
-// the MCP capture_step tool.
-// CaptureStep's warning return surfaces a non-fatal problem (couldn't
-// resolve the frontmost window, or resolved it but the screenshot itself
-// failed) without making the whole capture an error — a step with just a
-// note and no screenshot is still a useful step. An earlier version of
-// this function discarded these silently (`_ = err`), which meant "story
-// step"/capture_step gave no indication anything had gone wrong even when
-// every step came back with no window/image at all — caught via the Linux
-// backend's container-based testing (docs/product/11-decisions.md #10),
-// where a bug in the Linux window-resolution code was invisible until the
-// warning path was restored.
+// the MCP capture_step tool. The warning return surfaces a non-fatal
+// problem (couldn't resolve the frontmost window, or resolved it but the
+// screenshot itself failed) without making the whole capture an error — a
+// step with just a note and no screenshot is still a useful step. An
+// earlier version of this function discarded these silently (`_ = err`),
+// which meant "story step"/capture_step gave no indication anything had
+// gone wrong even when every step came back with no window/image at all —
+// caught via the Linux backend's container-based testing
+// (docs/product/11-decisions.md #10), where a bug in the Linux
+// window-resolution code was invisible until the warning path was
+// restored.
 func CaptureStep(note string) (step session.Step, warning string, err error) {
 	s, _, err := session.Current()
 	if err != nil {
@@ -188,33 +196,9 @@ func ExportMarkdown(name string) (path, content string, err error) {
 // run the global click listener, since holding a CFRunLoop open means that
 // process can't also be the short-lived command that started the session.
 func startClickDaemon(name, dir string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve executable path: %w", err)
+	if err := startBackgroundProcess("__click-daemon", name, session.DaemonPIDPath(dir), session.DaemonLogPath(dir)); err != nil {
+		return err
 	}
-
-	logFile, err := os.Create(session.DaemonLogPath(dir))
-	if err != nil {
-		return fmt.Errorf("create daemon log: %w", err)
-	}
-
-	cmd := exec.Command(exe, "__click-daemon", name)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		logFile.Close()
-		return fmt.Errorf("start click daemon: %w", err)
-	}
-	pid := cmd.Process.Pid
-	// We don't wait on the child — it outlives this command — so release
-	// our hold on it rather than leaving a zombie-avoidance goroutine.
-	_ = cmd.Process.Release()
-
-	if err := os.WriteFile(session.DaemonPIDPath(dir), []byte(strconv.Itoa(pid)), 0o644); err != nil {
-		return fmt.Errorf("write daemon pid: %w", err)
-	}
-
 	// Give the daemon a moment to report whether the event tap actually
 	// started (it needs Accessibility permission) before we tell the
 	// caller everything's fine.
@@ -226,9 +210,67 @@ func startClickDaemon(name, dir string) error {
 }
 
 func stopClickDaemon(dir string) {
-	pidBytes, err := os.ReadFile(session.DaemonPIDPath(dir))
+	stopBackgroundProcess(session.DaemonPIDPath(dir))
+}
+
+// startIdleWatchdog relaunches the executable to run RunIdleWatchdog in
+// the background — same relaunch-and-detach pattern as the click daemon,
+// but a separate process/PID since it needs to keep running even when
+// click-capture itself isn't available (e.g. Linux, decision #10) or
+// fails to start (no Accessibility permission).
+func startIdleWatchdog(name, dir string) {
+	if err := startBackgroundProcess("__idle-watchdog", name, session.IdleWatchdogPIDPath(dir), session.IdleWatchdogLogPath(dir)); err != nil {
+		// Best-effort: no idle nudge is a minor loss, not worth failing
+		// "record start" over. Nothing to log to here since there's no
+		// caller-facing warning channel for this the way click-capture
+		// has one — this is deliberately lower-stakes.
+		return
+	}
+}
+
+func stopIdleWatchdog(dir string) {
+	stopBackgroundProcess(session.IdleWatchdogPIDPath(dir))
+}
+
+// startBackgroundProcess relaunches the current executable as `<exe>
+// <subcommand> <name>`, detached (new session via Setsid so it survives
+// this process exiting), with stdout/stderr redirected to logPath and its
+// PID recorded at pidPath so a later stopBackgroundProcess call (from a
+// different, later process — "record stop") can find and signal it.
+func startBackgroundProcess(subcommand, name, pidPath, logPath string) error {
+	exe, err := os.Executable()
 	if err != nil {
-		return // no daemon was running for this session
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("create log: %w", err)
+	}
+
+	cmd := exec.Command(exe, subcommand, name)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return fmt.Errorf("start %s: %w", subcommand, err)
+	}
+	pid := cmd.Process.Pid
+	// We don't wait on the child — it outlives this command — so release
+	// our hold on it rather than leaving a zombie-avoidance goroutine.
+	_ = cmd.Process.Release()
+
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o644); err != nil {
+		return fmt.Errorf("write pid: %w", err)
+	}
+	return nil
+}
+
+func stopBackgroundProcess(pidPath string) {
+	pidBytes, err := os.ReadFile(pidPath)
+	if err != nil {
+		return // nothing running
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
 	if err != nil {
@@ -237,10 +279,10 @@ func stopClickDaemon(dir string) {
 	if proc, err := os.FindProcess(pid); err == nil {
 		_ = proc.Signal(syscall.SIGTERM)
 	}
-	// Let it flush the in-flight step (if any) before we finalize the
-	// session file.
+	// Let it flush any in-flight work before the caller finalizes state
+	// that depends on it having stopped.
 	time.Sleep(300 * time.Millisecond)
-	os.Remove(session.DaemonPIDPath(dir))
+	os.Remove(pidPath)
 }
 
 // findFailureLine scans the daemon log for a line indicating the click
@@ -330,4 +372,82 @@ func RunClickDaemon(name string, logf func(format string, args ...any)) error {
 	}
 	logf("click-daemon: stopped")
 	return nil
+}
+
+// idleWarnAfter and idleCheckInterval are overridable via env vars so this
+// is actually testable without waiting the real default out — and so a
+// real user isn't stuck with a hardcoded threshold that doesn't fit how
+// they work.
+func idleWarnAfter() time.Duration {
+	return durationEnv("STORY_IDLE_WARN_AFTER", 20*time.Minute)
+}
+
+func idleCheckInterval() time.Duration {
+	return durationEnv("STORY_IDLE_CHECK_INTERVAL", time.Minute)
+}
+
+func durationEnv(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
+}
+
+// RunIdleWatchdog is the idle-watchdog process's entrypoint (relaunched by
+// startIdleWatchdog as "story __idle-watchdog <name>"): periodically
+// checks how long it's been since the session's last step and sends a
+// desktop notification once that exceeds idleWarnAfter — the "still
+// recording — stop?" soft nudge from docs/product/07-edge-cases.md, for a
+// recording left running accidentally. Exits when the session is stopped
+// (session.json's stopped_at gets set — detected on the next poll) or on
+// SIGTERM (sent by stopIdleWatchdog). Runs unconditionally alongside
+// click-capture, not as part of it, so it still works when click-capture
+// itself isn't available (e.g. Linux, decision #10).
+func RunIdleWatchdog(name string, logf func(format string, args ...any)) error {
+	warnAfter := idleWarnAfter()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	ticker := time.NewTicker(idleCheckInterval())
+	defer ticker.Stop()
+
+	logf("idle-watchdog: watching (warn after %s)", warnAfter)
+	var lastNotified time.Time
+	for {
+		select {
+		case <-sigCh:
+			logf("idle-watchdog: stopped")
+			return nil
+		case <-ticker.C:
+			s, _, err := session.Load(name)
+			if err != nil || s.StoppedAt != nil {
+				logf("idle-watchdog: session finished, exiting")
+				return nil
+			}
+
+			lastActivity := s.StartedAt
+			if len(s.Steps) > 0 {
+				lastActivity = s.Steps[len(s.Steps)-1].Timestamp
+			}
+			idleFor := time.Since(lastActivity)
+
+			if idleFor < warnAfter {
+				lastNotified = time.Time{} // activity resumed since the last idle streak
+				continue
+			}
+			// Re-notify at most once per warnAfter-sized window rather
+			// than spamming every check interval while still idle.
+			if !lastNotified.IsZero() && time.Since(lastNotified) < warnAfter {
+				continue
+			}
+			msg := fmt.Sprintf("%q has had no activity for %s — still recording?", name, idleFor.Round(time.Second))
+			if err := notify.Send("Story", msg); err != nil {
+				logf("idle-watchdog: notify failed: %v", err)
+			} else {
+				logf("idle-watchdog: notified (%s idle)", idleFor.Round(time.Second))
+			}
+			lastNotified = time.Now()
+		}
+	}
 }
