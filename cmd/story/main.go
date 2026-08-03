@@ -46,6 +46,8 @@ func main() {
 		err = cmdExport(os.Args[2:])
 	case "edit":
 		err = cmdEdit(os.Args[2:])
+	case "tui":
+		err = cmdTUI(os.Args[2:])
 	case "mcp":
 		err = cmdMCP(os.Args[2:])
 	case "__click-daemon":
@@ -81,6 +83,7 @@ Usage:
   story windows list            List candidate windows to capture
   story export <name> [--format md|pdf|slides]   Render a session (default: md)
   story edit <name>             Open the local web editor (reorder/hide/caption)
+  story tui                     Session dashboard — list, edit, export, all from the terminal
   story mcp                     Run the MCP server (stdio) for agent-driven capture
 
 Session data lives under ~/.story/sessions/<name>/.`)
@@ -339,7 +342,11 @@ func cmdEdit(args []string) error {
 	return nil
 }
 
-func openBrowser(url string) {
+// openBrowser is a package-level var, not a plain func, so tests (the
+// TUI's in particular, which exercises the exact "open the editor" path
+// interactively) can swap it out for a no-op rather than actually
+// spawning a real browser window every test run.
+var openBrowser = func(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

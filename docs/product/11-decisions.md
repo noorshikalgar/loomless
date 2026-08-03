@@ -1167,6 +1167,110 @@ whatever comes next.
    exactly under the link text, not just plain glyphs that merely looked
    like a link.
 
+## 23. A real TUI (`story tui`) for session management
+
+Decided 2026-08-03, direct request: *"make cli a proper TUI kind app,
+where it can show list session shortcuts to edit etc fully functional
+TUI app."* Decision #14 chose a browser-based editor over a TUI, but
+that decision was specifically about the *visual editing* work
+(redaction, annotations) needing a canvas a terminal can't give you —
+it never claimed a TUI has no place in this project. Session
+*management* (which sessions exist, how big are they, jump into
+editing/exporting one) is exactly the kind of fast, keyboard-driven
+overview a TUI is good at, so `story tui` is additive: a third way to
+use Story alongside the scriptable CLI/MCP surface and the existing
+`story edit` web UI, not a replacement for either.
+
+**Stack**: `github.com/charmbracelet/bubbletea` + `bubbles/list` +
+`lipgloss` — the de facto standard Go TUI toolkit (pure Go, no cgo,
+actively maintained, used by a huge fraction of the Go TUI ecosystem),
+chosen over hand-rolling raw ANSI/terminal handling for the same reason
+`goldmark`/`fpdf` were chosen over hand-rolled alternatives elsewhere in
+this project: a well-solved problem beats a partially-solved one.
+
+**New primitive**: `session.List()` — reads every directory under
+`~/.story/sessions`, loads each `session.json`, sorts by `StartedAt`
+descending. A session directory that fails to load (corrupted or
+mid-write `session.json`) is skipped rather than failing the whole
+listing — one bad session shouldn't hide every other one.
+
+**Scope of this first pass**: list sessions (name, step count, started
+time, a "● recording" marker for any session whose `StoppedAt` is still
+nil), open the selected session's existing local web editor (`e`/enter —
+reuses `internal/editor.NewHandler` exactly as `story edit` does,
+listening on `127.0.0.1:0` and opening the system browser), export to
+any format (`m`/`p`/`s` — reuses `internal/engine`'s existing
+`ExportMarkdown`/`ExportPDF`/`ExportSlides`, the same functions the
+plain CLI calls), and refresh (`r`, since sessions can be created by a
+concurrently-running `story record start` or MCP client). Deliberately
+**not** in this pass: starting/stopping a recording from the TUI —
+`engine.StopRecording()` only operates on the single process-wide
+"current" session pointer `story record start` maintains, not an
+arbitrary session picked from a list, so wiring that up correctly needs
+new plumbing rather than just a new keybinding; and session deletion,
+which wasn't asked for and deserves its own confirm-before-destroy
+design rather than being bolted on. Both are natural follow-ups, not
+blocked by anything built here.
+
+**Concurrency design, stated explicitly because it's the part most
+likely to be gotten wrong in a TUI**: every state mutation
+(`m.editors[name] = ...`, `m.status = ...`) happens synchronously on
+bubbletea's single Update-loop goroutine, never inside an async
+`tea.Cmd` closure. `editor.NewHandler`, `net.Listen`, and the export
+functions are all fast, local, non-blocking calls (the export functions
+do the same synchronous disk I/O the plain `story export` CLI already
+does with no progress indicator), so there was no real need to reach for
+`tea.Cmd`'s async-command-then-Msg pattern at all for this pass — doing
+so anyway would have meant either accepting a genuine data race on
+`m.editors` (a Go map, mutated from a goroutine while Update might
+concurrently read it) or building out a Msg-passing layer to avoid one,
+for no actual benefit here. The one genuinely-async piece — the editor
+HTTP server's blocking `Serve` loop — gets its own goroutine exactly
+once per session, tracked in `m.editors` so a second "open editor" on
+the same session reuses the running server instead of binding a second
+port; all tracked servers are closed on quit (`ctrl+c`/`q`) before
+`tea.Quit`.
+
+`openBrowser` (previously a plain top-level func in `cmd/story/main.go`,
+shared with the existing `story edit` command) became a package-level
+`var` purely so tests could swap in a no-op recorder — otherwise every
+test run of the "open editor" action would pop open a real browser
+window.
+
+**Verified:**
+
+1. Unit tests (`cmd/story/tui_test.go`): session listing count and
+   order, the recording-status marker on `Title()` for a stopped vs.
+   unstopped session, that `export("md")` actually produces the file on
+   disk (not just a non-error return), that `refresh()` picks up a
+   session created after the model was constructed, and — the one most
+   worth having — that opening the editor twice on the same session
+   reuses the exact same `*http.Server` and only calls `openBrowser`
+   with the (identical) URL both times rather than binding a second
+   port.
+2. `go build/vet/gofmt` clean, full suite passing.
+3. **Full interactive verification against the real compiled binary**,
+   driven through an actual pseudo-terminal (Python's `pty` module,
+   explicit `TIOCSWINSZ` to give it a real size, and manually answering
+   the OSC-11/cursor-position queries bubbletea's terminal-capability
+   detection blocks on when nothing responds — without that, the
+   program hangs indefinitely waiting for a reply no raw pty ever
+   sends). Screen contents were reconstructed with `pyte` (a real VT100
+   emulator) rather than grepping raw ANSI bytes, since bubbletea
+   renders via incremental line diffs, not full-screen redraws.
+   Confirmed, against real session data on disk: the session list
+   renders with correct names/step-counts/timestamps in the right
+   (most-recent-first) order; the down-arrow moves the selection cursor;
+   pressing `m` actually exports and the status line updates to show the
+   real output path (confirmed the file landed on disk, not just that
+   the status text changed); pressing `e` starts a real server — an
+   actual HTTP request to `<url>/api/session` got a `200` back — and
+   after `q`, that same URL became unreachable (server closed) while the
+   process itself exited cleanly (exit status 0, confirmed via
+   `waitpid`, not just "still running" checks — which is meaningless for
+   an unreaped child, a mistake the first pass at this test made and
+   quietly reported a false hang until corrected).
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

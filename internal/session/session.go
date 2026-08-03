@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -206,6 +207,40 @@ func Create(name string) (*Session, string, error) {
 		return nil, "", err
 	}
 	return s, dir, nil
+}
+
+// List returns every session found under ~/.story/sessions, sorted by
+// StartedAt descending (most recent first) — used by the TUI's session
+// list. A session directory that fails to load (corrupted or mid-write
+// session.json) is skipped rather than failing the whole listing, since
+// one bad session shouldn't hide every other one from view.
+func List() ([]Session, error) {
+	root, err := Root()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "sessions"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	var sessions []Session
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		s, _, err := Load(e.Name())
+		if err != nil {
+			continue
+		}
+		sessions = append(sessions, *s)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].StartedAt.After(sessions[j].StartedAt)
+	})
+	return sessions, nil
 }
 
 // Load reads a session by name.

@@ -83,6 +83,7 @@ go build -o story ./cmd/story
 ./story export my-first-story                 # Markdown (default)
 ./story export my-first-story --format pdf    # or a PDF, screenshots embedded
 ./story export my-first-story --format slides # or a self-contained HTML slide deck
+./story tui                                   # or: browse all sessions, edit/export from a terminal dashboard
 ```
 
 **Linux (X11) dependencies:** `xdotool`, `wmctrl`, `xprop` (usually

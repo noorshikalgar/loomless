@@ -1,6 +1,68 @@
 package session
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestList(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if sessions, err := List(); err != nil || len(sessions) != 0 {
+		t.Fatalf("List() with no sessions dir yet = %v, %v; want (nil, nil)", sessions, err)
+	}
+
+	if _, _, err := Create("alpha"); err != nil {
+		t.Fatalf("Create(alpha): %v", err)
+	}
+	time.Sleep(2 * time.Millisecond) // guarantee a distinct, later StartedAt
+	if _, _, err := Create("beta"); err != nil {
+		t.Fatalf("Create(beta): %v", err)
+	}
+
+	sessions, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("List() = %d sessions, want 2", len(sessions))
+	}
+	if sessions[0].Name != "beta" || sessions[1].Name != "alpha" {
+		t.Errorf("List() order = [%s, %s], want [beta, alpha] (most recently started first)", sessions[0].Name, sessions[1].Name)
+	}
+}
+
+// TestListSkipsCorruptedSession confirms one unreadable session directory
+// doesn't hide every other session from the list — a corrupted or
+// mid-write session.json shouldn't make the whole TUI/CLI listing fail.
+func TestListSkipsCorruptedSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if _, _, err := Create("good"); err != nil {
+		t.Fatalf("Create(good): %v", err)
+	}
+	root, err := Root()
+	if err != nil {
+		t.Fatalf("Root: %v", err)
+	}
+	badDir := filepath.Join(root, "sessions", "bad")
+	if err := os.MkdirAll(badDir, 0o755); err != nil {
+		t.Fatalf("mkdir bad session dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "session.json"), []byte("not valid json"), 0o644); err != nil {
+		t.Fatalf("write corrupted session.json: %v", err)
+	}
+
+	sessions, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Name != "good" {
+		t.Errorf("List() = %v, want just [good] (corrupted session skipped, not fatal)", sessions)
+	}
+}
 
 func TestVisibleSteps(t *testing.T) {
 	base := func() Session {
