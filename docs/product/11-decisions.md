@@ -639,6 +639,106 @@ focus change). Logic reviewed, not click-verified end to end — same
 limitation noted for decision #15, synthesizing a real OS-level click
 isn't possible in this environment.
 
+## 18. Generic, numbered, editable annotations — click-highlight and manual highlight unified
+
+Decided 2026-08-03, directly requested by the user: numbered badges on
+highlights, user-editable numbers so a caption can say "1: this, 2:
+that," and — explicitly — "even the click highlight should be editable
+later, keep generic." That last part is the architecturally significant
+one: it means the automatic click-ring and manually-drawn highlights
+can't stay two different mechanisms (one baked permanently into pixels at
+capture time, one baked in by the editor) — they have to become the same
+kind of object.
+
+**The shift:** highlights are no longer baked into a screenshot's pixels
+at all. `Step` gains `Annotations []Annotation` — `{ID, Number, X, Y, W,
+H}` in image pixel coordinates. `ID` is assigned once and never changes
+(how the API addresses a specific annotation); `Number` is the free-form,
+user-editable display badge (defaults to creation order). The screenshot
+file itself stays clean; annotations render as a live overlay in the
+editor and are only flattened onto a *copy* of the image at export time
+(`internal/export/image.go`'s `stepImageBytes`/`stepImagePath` — the
+on-disk original is never touched, mirroring how `DisplayOrder`/`Hidden`
+already work as a presentation-time layer over immutable `Steps`).
+`session.AddAnnotation`/`UpdateAnnotation`/`DeleteAnnotation` follow the
+same reload-mutate-log-save pattern as every other edit function, each
+logged to `EditLog`.
+
+**Redaction stays exactly as it was — pixel-destructive, immediate, not
+part of this list.** The user's ask was specifically about highlights;
+redaction's whole point is that the covered content is actually gone, so
+making it a movable/undoable "annotation object" would work against the
+reason it exists. `EditImage`'s `action` parameter is narrowed to
+`"redact"` only now that highlights have their own path.
+
+**Click daemon:** `engine.RunClickDaemon` no longer calls a
+pixel-mutating `Highlight` function (removed from `internal/capture`
+entirely, along with its `drawRing` helper — both fully superseded, not
+left around unused). It saves a clean screenshot and, when a highlight is
+warranted, computes the click's bounding box in image pixel space
+(`capture.PixelSize` — decodes just the PNG header, not the whole image)
+and calls `session.AddAnnotation` — the exact same function the editor's
+"Draw Highlight" button calls. One mechanism, two entry points, which is
+what "keep generic" meant.
+
+**Numbered badge rendering** (`capture.RenderAnnotations`, used by all
+three exporters via the new `stepImageBytes`/`stepImagePath`) draws a
+rectangle outline plus a filled circular badge with the number drawn in
+it, using `golang.org/x/image/font/basicfont` — a built-in bitmap font,
+no font file to bundle, consistent with the PDF exporter's own
+no-external-assets stance (decision #12).
+
+**Editor UI:** existing annotations are always live and interactive —
+drag the body to move, drag a corner handle to resize, edit the number
+input directly, click × to delete — each committing immediately via the
+API (no Apply step, since editing an annotation that already exists
+isn't destructive the way redaction is). Creating a *new* highlight
+reuses the same draw → adjust → Apply flow redaction already had; Apply
+branches to `/api/annotation` (create) instead of `/api/edit-image`
+depending on which was armed.
+
+**Verified in layers, each with a real result to check against:**
+
+1. Unit tests (`internal/capture/annotate_test.go`,
+   `TestRenderAnnotationsDrawsBorderAndBadgeLeavesRestUntouched`) —
+   confirmed the border renders in the highlight color, the interior
+   away from the badge stays untouched, and the badge circle itself
+   (sampled off the exact center, which can legitimately land on the
+   digit glyph instead of the badge background — caught by the first
+   version of this test) is the correct color. A second test confirmed
+   `RenderAnnotations` with an empty list returns the input completely
+   unchanged (no wasted decode/re-encode round-trip).
+2. A standalone visual check (three annotations, including a two-digit
+   number "12") confirmed the badges render legibly and correctly
+   centered before wiring this into the exporters at all.
+3. Full interactive verification against a live editor, using precise
+   synthetic `MouseEvent`s (the same method that caught the coordinate
+   bug in decision #17): created an annotation via the real draw →
+   adjust → Apply UI flow, confirmed it persisted with the right ID and
+   an incrementing `Number`; renumbered it (confirmed `ID` stayed fixed
+   while `Number` changed — the whole point of separating the two);
+   moved it (confirmed position changed, size didn't); resized it via a
+   corner handle (confirmed the opposite corner stayed anchored); deleted
+   it (confirmed it's gone from the step and logged). Created two fresh
+   annotations and exported to Markdown/PDF/Slides — confirmed the
+   Markdown file links to a freshly-generated `*.annotated.png`, not the
+   original `.png` (timestamps differ, proving the original was never
+   touched), and visually confirmed both numbered badges render
+   correctly and distinctly in the flattened output. Re-tested redaction
+   afterward as a regression check, since its pixel-drawing internals
+   were refactored to share code with the new annotation renderer —
+   still produces genuinely unrecoverable black pixels, confirmed the
+   same way as decision #16 (independent read of the raw bytes).
+
+**Not verified: the automatic click-daemon path creating an annotation
+from a real physical click**, for the same reason noted in decisions #15
+and #17 — synthesizing a real OS-level click isn't possible in this
+environment. `AddAnnotation` itself (the function the click daemon calls)
+*is* thoroughly verified above, exercised via the identical code path the
+editor's "Draw Highlight" button uses; what's specifically unconfirmed is
+the click daemon's own coordinate math (click position → window-relative
+point → pixel-space bounding box) ahead of that call.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

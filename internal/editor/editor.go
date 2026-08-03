@@ -2,20 +2,20 @@
 // per docs/product/03-features.md and open question #12 in
 // docs/product/10-open-questions.md) — a localhost-only HTTP server
 // serving a single-page app that lets a human reorder steps, hide ones
-// they don't want in the exported story, and fix up captions, before
-// exporting. Chosen over a TUI per 08-technical-considerations.md's own
-// reasoning ("a browser-based local UI handles [visual editing] far more
-// easily than a TUI") — this Phase 2 slice doesn't yet do the visual
-// screenshot redaction/crop editing that reasoning was really about (see
-// the follow-up task), but the same reasoning already applies to viewing
-// screenshots inline while reordering/captioning, and keeps this on the
-// same architecture the redaction follow-up will need anyway.
+// they don't want in the exported story, fix up captions, redact
+// sensitive parts of a screenshot, and add/move/renumber/delete numbered
+// highlight annotations. Chosen over a TUI per
+// 08-technical-considerations.md's own reasoning ("a browser-based local
+// UI handles [visual editing] far more easily than a TUI").
 //
-// Every mutation goes through internal/session's edit functions
-// (ReorderSteps/SetStepHidden/EditNote), which reload from disk, mutate,
-// log to Session.EditLog, and save — this package holds no session state
+// Most mutations go through internal/session's edit functions
+// (ReorderSteps/SetStepHidden/EditNote/EditImage/AddAnnotation/
+// UpdateAnnotation/DeleteAnnotation), which reload from disk, mutate, log
+// to Session.EditLog, and save — this package holds no *session* state
 // itself beyond the name and directory, so it can't drift from what's
-// actually on disk between requests.
+// actually on disk between requests. It does hold one piece of ephemeral,
+// non-session state: the redaction undo/redo history (history.go), which
+// is intentionally process-local — see decision #17.
 package editor
 
 import (
@@ -140,10 +140,14 @@ func NewHandler(name string) (http.Handler, error) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	// /api/edit-image is redaction only now — highlights go through
+	// /api/annotation instead (decision #18), since unlike redaction
+	// they're meant to stay movable/renumberable/deletable, not baked
+	// into the image's pixels.
 	mux.HandleFunc("POST /api/edit-image", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Index  int     `json:"index"`
-			Action string  `json:"action"` // "redact" | "highlight"
+			Action string  `json:"action"` // "redact"
 			X      float64 `json:"x"`
 			Y      float64 `json:"y"`
 			W      float64 `json:"w"`
@@ -178,6 +182,59 @@ func NewHandler(name string) (http.Handler, error) {
 		handleHistoryOp(w, r, name, func(idx int, _ []byte) ([]byte, bool) {
 			return history.resetStep(idx)
 		}, stepImage, "image_reset")
+	})
+	mux.HandleFunc("POST /api/annotation", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index int     `json:"index"`
+			X     float64 `json:"x"`
+			Y     float64 `json:"y"`
+			W     float64 `json:"w"`
+			H     float64 `json:"h"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.AddAnnotation(name, body.Index, body.X, body.Y, body.W, body.H); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/annotation/update", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index  int     `json:"index"`
+			ID     int     `json:"id"`
+			X      float64 `json:"x"`
+			Y      float64 `json:"y"`
+			W      float64 `json:"w"`
+			H      float64 `json:"h"`
+			Number int     `json:"number"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.UpdateAnnotation(name, body.Index, body.ID, body.X, body.Y, body.W, body.H, body.Number); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/annotation/delete", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index int `json:"index"`
+			ID    int `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.DeleteAnnotation(name, body.Index, body.ID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	return mux, nil

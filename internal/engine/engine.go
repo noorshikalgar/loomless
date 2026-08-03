@@ -35,6 +35,11 @@ import (
 // moment into a single step, per docs/product/07-edge-cases.md.
 const clickDebounce = 300 * time.Millisecond
 
+// clickAnnotationRadiusPts sizes the automatic click annotation's bounding
+// box (in the same point unit as WindowInfo bounds — converted to pixels
+// using the screenshot's actual size, same as the old baked-in ring was).
+const clickAnnotationRadiusPts = 14.0
+
 func clamp(v, min, max float64) float64 {
 	if v < min {
 		return min
@@ -186,7 +191,7 @@ func ExportMarkdown(name string) (path, content string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	md := export.Markdown(s)
+	md := export.Markdown(s, dir)
 	outPath := dir + "/" + name + ".md"
 	if err := os.WriteFile(outPath, []byte(md), 0o644); err != nil {
 		return "", "", fmt.Errorf("write export: %w", err)
@@ -397,37 +402,55 @@ func RunClickDaemon(name string, highlightClicks bool, logf func(format string, 
 		win, err := capture.Frontmost()
 		windowApp, windowTitle := "", ""
 		var image []byte
+		wantAnnotation := false
+		var annX, annY, annW, annH float64
+
 		if err == nil {
 			windowApp, windowTitle = win.App, win.Title
 			// A click that raises a background window to the front is
 			// almost always "switch my attention here," not "interact
 			// with this specific spot" — the coordinates are wherever the
 			// background window happened to be, not a deliberate target.
-			// Ringing that point is more misleading than helpful, so the
+			// Marking that point is more misleading than helpful, so the
 			// screenshot is still captured (the window switch is real
-			// context for the story) but without the highlight marker.
+			// context for the story) but without an annotation.
 			focusJustChanged := windowApp != lastFrontmostApp
 			lastFrontmostApp = windowApp
 
 			shot, serr := capture.Screenshot(win) // best-effort; missing Screen Recording permission shouldn't kill the daemon
 			if serr == nil {
+				image = shot
+				// The screenshot itself stays clean — no ring baked into
+				// its pixels. Per decision #18, the marker is recorded as
+				// a numbered Annotation instead, so it can be moved,
+				// renumbered, or removed later the same as a manually
+				// drawn one, both going through the same mechanism.
 				if highlightClicks && !focusJustChanged {
 					// Window may have moved/resized between the click and
 					// this Frontmost() lookup; clamp so the marker stays
-					// on-image instead of drawing off the edge.
+					// on-image instead of landing off the edge.
 					relX := clamp(x-win.X, 0, win.W)
 					relY := clamp(y-win.Y, 0, win.H)
-					if annotated, aerr := capture.Highlight(shot, relX, relY, win.W, win.H); aerr == nil {
-						shot = annotated
+					if pxW, _, perr := capture.PixelSize(shot); perr == nil && win.W > 0 {
+						scale := float64(pxW) / win.W
+						annW = clickAnnotationRadiusPts * 2 * scale
+						annH = annW
+						annX = relX*scale - annW/2
+						annY = relY*scale - annH/2
+						wantAnnotation = true
 					}
 				}
-				image = shot
 			}
 		}
 		step, err := session.AppendStep(name, "", windowApp, windowTitle, image)
 		if err != nil {
 			logf("append step failed: %v", err)
 			return
+		}
+		if wantAnnotation {
+			if _, aerr := session.AddAnnotation(name, step.Index, annX, annY, annW, annH); aerr != nil {
+				logf("add annotation failed: %v", aerr)
+			}
 		}
 		if len(step.Masked) > 0 {
 			logf("masked possible secret(s) in step %d (%s)", step.Index, strings.Join(step.Masked, ", "))

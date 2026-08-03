@@ -27,10 +27,11 @@ screenshots: **window-scoped, not full-screen**; terminal capture: **explicit
 capture time**; Linux: **X11 via standard tools, no click-capture yet**;
 forgotten recordings: **desktop notification after 20min idle, not
 auto-stop**; PDF/slides: **rendered directly from session data, pure Go,
-no headless-browser/CDN dependency**; local editor: **web UI,
-not TUI, with click-and-drag redact/highlight on screenshots — see
-decisions #14/#16**). Not done: auto-captions, Windows, Wayland,
-sharing — all later phases.
+no headless-browser/CDN dependency**; local editor: **web UI, not
+TUI**; highlights: **numbered, editable annotations shared by the
+automatic click-ring and manual highlights, not baked into pixels —
+see decisions #14/#16/#18**). Not done: auto-captions, Windows,
+Wayland, sharing — all later phases.
 
 ## Why
 
@@ -78,7 +79,7 @@ go build -o story ./cmd/story
 ./story step "optional note, no click needed"
 ./story run -- go test ./...     # captures the command + its output as a step
 ./story record stop
-./story edit my-first-story                   # reorder/hide/caption, or draw+adjust redact/highlight boxes (with undo/redo)
+./story edit my-first-story                   # reorder/hide/caption, redact (undo/redo), or add numbered highlight callouts
 ./story export my-first-story                 # Markdown (default)
 ./story export my-first-story --format pdf    # or a PDF, screenshots embedded
 ./story export my-first-story --format slides # or a self-contained HTML slide deck

@@ -43,6 +43,36 @@ type Step struct {
 	// Applied unconditionally before anything in the step is written to
 	// disk, not something callers opt into. See docs/product/07-edge-cases.md.
 	Masked []string `json:"masked,omitempty"`
+
+	// Annotations are numbered highlight markers on ImageFile — decision
+	// #18: generic and editable, unlike redaction. Both the automatic
+	// click-ring (engine.RunClickDaemon) and manually-drawn highlights
+	// (the local editor) go through this same list rather than each
+	// baking a marker into the screenshot's pixels, which is what let
+	// neither be moved, renumbered, or removed after the fact. ImageFile
+	// itself stays clean; annotations are rendered as an overlay in the
+	// editor and only flattened onto a copy of the image at export time
+	// (internal/export). Redaction is deliberately NOT part of this list
+	// — it stays pixel-destructive (EditImage), because the whole point
+	// of redacting something is that it's actually gone, not an object
+	// you could accidentally un-hide later.
+	Annotations []Annotation `json:"annotations,omitempty"`
+}
+
+// Annotation is one numbered highlight marker in image pixel coordinates.
+// ID is assigned once at creation and never changes — it's how the editor
+// API addresses a specific annotation. Number is the user-facing badge
+// shown on the marker and referenced in captions ("1: the export button,
+// 2: the confirmation dialog") — freely editable, defaults to creation
+// order, not required to be unique (renumbering is the user's call, not
+// enforced here).
+type Annotation struct {
+	ID     int     `json:"id"`
+	Number int     `json:"number"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	W      float64 `json:"w"`
+	H      float64 `json:"h"`
 }
 
 // Session is one recording: a named, ordered sequence of steps.
@@ -549,8 +579,8 @@ func EditNote(name string, stepIndex int, newNote string) (*Session, error) {
 // itself, which was never retained anywhere to leak) per
 // docs/product/06-editing-and-versioning.md's redaction carve-out.
 func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*Session, error) {
-	if action != "redact" && action != "highlight" {
-		return nil, fmt.Errorf("unknown image edit action %q (want redact or highlight)", action)
+	if action != "redact" {
+		return nil, fmt.Errorf("unknown image edit action %q (want redact)", action)
 	}
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("rectangle must have positive width and height")
@@ -560,16 +590,9 @@ func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*
 	if err != nil {
 		return nil, err
 	}
-
-	var target *Step
-	for i := range s.Steps {
-		if s.Steps[i].Index == stepIndex {
-			target = &s.Steps[i]
-			break
-		}
-	}
-	if target == nil {
-		return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
 	}
 	if target.ImageFile == "" {
 		return nil, fmt.Errorf("step %d has no screenshot to edit", stepIndex)
@@ -581,12 +604,7 @@ func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*
 		return nil, fmt.Errorf("read image: %w", err)
 	}
 
-	var edited []byte
-	if action == "redact" {
-		edited, err = capture.Redact(data, x, y, w, h)
-	} else {
-		edited, err = capture.DrawBoxHighlight(data, x, y, w, h)
-	}
+	edited, err := capture.Redact(data, x, y, w, h)
 	if err != nil {
 		return nil, err
 	}
@@ -595,8 +613,135 @@ func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*
 	}
 
 	s.EditLog = append(s.EditLog, EditEntry{
-		Timestamp: time.Now(), Action: "image_" + action, StepIndex: stepIndex,
+		Timestamp: time.Now(), Action: "image_redact", StepIndex: stepIndex,
 		NewValue: fmt.Sprintf("rect(%.0f,%.0f,%.0f,%.0f)", x, y, w, h),
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// findStep returns a pointer into s.Steps for the given step index, so
+// callers can mutate it in place before save() — shared by EditImage and
+// every Annotation function below to avoid repeating the same lookup loop.
+func findStep(s *Session, stepIndex int) (*Step, error) {
+	for i := range s.Steps {
+		if s.Steps[i].Index == stepIndex {
+			return &s.Steps[i], nil
+		}
+	}
+	return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+}
+
+// AddAnnotation reloads the named session, appends a new numbered
+// Annotation to a step (auto-numbered one past the highest existing
+// number on that step — freely renumbered afterward via
+// UpdateAnnotation), logs the change, and saves. Used by both the click
+// daemon's automatic ring and the editor's manually-drawn highlights —
+// see decision #18.
+func AddAnnotation(name string, stepIndex int, x, y, w, h float64) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	nextID, nextNumber := 1, 1
+	for _, a := range target.Annotations {
+		if a.ID >= nextID {
+			nextID = a.ID + 1
+		}
+		if a.Number >= nextNumber {
+			nextNumber = a.Number + 1
+		}
+	}
+	target.Annotations = append(target.Annotations, Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h})
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "add_annotation", StepIndex: stepIndex,
+		NewValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", nextNumber, x, y, w, h),
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// UpdateAnnotation reloads the named session and replaces an existing
+// annotation's position, size, and display number — identified by its
+// stable ID, which never changes, not by its position in the list or its
+// (freely reassignable) Number.
+func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float64, number int) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	var old Annotation
+	found := false
+	for i := range target.Annotations {
+		if target.Annotations[i].ID == annotationID {
+			old = target.Annotations[i]
+			target.Annotations[i].X, target.Annotations[i].Y = x, y
+			target.Annotations[i].W, target.Annotations[i].H = w, h
+			target.Annotations[i].Number = number
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("annotation %d does not exist on step %d", annotationID, stepIndex)
+	}
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "update_annotation", StepIndex: stepIndex,
+		OldValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", old.Number, old.X, old.Y, old.W, old.H),
+		NewValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", number, x, y, w, h),
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// DeleteAnnotation reloads the named session, removes an annotation
+// (identified by ID) from a step, logs the change, and saves. The
+// underlying screenshot is untouched — annotations were never baked into
+// its pixels, so there's nothing to restore.
+func DeleteAnnotation(name string, stepIndex, annotationID int) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	idx := -1
+	for i, a := range target.Annotations {
+		if a.ID == annotationID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil, fmt.Errorf("annotation %d does not exist on step %d", annotationID, stepIndex)
+	}
+	removed := target.Annotations[idx]
+	target.Annotations = append(target.Annotations[:idx], target.Annotations[idx+1:]...)
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "delete_annotation", StepIndex: stepIndex,
+		OldValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", removed.Number, removed.X, removed.Y, removed.W, removed.H),
 	})
 	if err := save(dir, s); err != nil {
 		return nil, err

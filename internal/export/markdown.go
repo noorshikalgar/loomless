@@ -11,8 +11,11 @@ import (
 )
 
 // Markdown renders a session as an ordered list of steps, each with its
-// screenshot (linked by relative path) and caption.
-func Markdown(s *session.Session) string {
+// screenshot (linked by relative path) and caption. dir is the session's
+// folder — needed to flatten any annotations onto a copy of a step's
+// image (see stepImagePath in image.go); the original on disk is never
+// touched.
+func Markdown(s *session.Session, dir string) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# %s\n\n", s.Name)
@@ -59,7 +62,11 @@ func Markdown(s *session.Session) string {
 			fmt.Fprintf(&b, "%s\n\n", step.Note)
 		}
 		if step.ImageFile != "" {
-			fmt.Fprintf(&b, "![Step %d](%s)\n\n", step.Index, step.ImageFile)
+			imgPath, err := stepImagePath(dir, step)
+			if err != nil {
+				imgPath = step.ImageFile // fall back to the unannotated original rather than dropping the image
+			}
+			fmt.Fprintf(&b, "![Step %d](%s)\n\n", step.Index, imgPath)
 		}
 	}
 

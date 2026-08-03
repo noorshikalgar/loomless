@@ -3,8 +3,6 @@ package export
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/go-pdf/fpdf"
@@ -97,8 +95,7 @@ func renderWindowStep(pdf *fpdf.Fpdf, step session.Step, dir string) {
 	if step.ImageFile == "" {
 		return
 	}
-	imgPath := filepath.Join(dir, step.ImageFile)
-	imgData, err := os.ReadFile(imgPath)
+	imgData, err := stepImageBytes(dir, step)
 	if err != nil {
 		pdf.SetFont("Helvetica", "I", 9)
 		pdf.MultiCell(0, 6, safe(fmt.Sprintf("[screenshot missing: %s]", step.ImageFile)), "", "L", false)

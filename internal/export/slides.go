@@ -4,8 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/noorshikalgar/story/internal/session"
@@ -63,7 +61,7 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 				fmt.Fprintf(&b, "<p class=\"note\">%s</p>\n", html.EscapeString(step.Note))
 			}
 			if step.ImageFile != "" {
-				if dataURI, err := imageDataURI(dir, step.ImageFile); err == nil {
+				if dataURI, err := imageDataURI(dir, step); err == nil {
 					fmt.Fprintf(&b, "<img src=\"%s\" alt=\"Step %d screenshot\">\n", dataURI, step.Index)
 				} else {
 					fmt.Fprintf(&b, "<p class=\"exit\">[screenshot missing: %s]</p>\n", html.EscapeString(step.ImageFile))
@@ -80,8 +78,8 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-func imageDataURI(dir, imageFile string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, imageFile))
+func imageDataURI(dir string, step session.Step) (string, error) {
+	data, err := stepImageBytes(dir, step)
 	if err != nil {
 		return "", err
 	}

@@ -55,6 +55,11 @@ const editorCSS = `
   .resize-handle { position: absolute; width: 10px; height: 10px; margin: -5px; background: #fff; border: 1px solid #333; border-radius: 2px; z-index: 2; }
   .handle-nw, .handle-se { cursor: nwse-resize; }
   .handle-ne, .handle-sw { cursor: nesw-resize; }
+  .annotation { position: absolute; border: 3px solid #ff3b30; box-sizing: border-box; cursor: move; z-index: 3; }
+  .annotation-badge { position: absolute; top: -12px; left: -12px; width: 24px; height: 24px; border-radius: 50%; background: #ff3b30; color: #fff; border: 1px solid #a03c3c; text-align: center; font-size: 0.7rem; padding: 0; font-family: inherit; z-index: 4; }
+  .annotation-badge::-webkit-inner-spin-button, .annotation-badge::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .annotation-delete { position: absolute; top: -10px; right: -10px; width: 18px; height: 18px; border-radius: 50%; background: #444; color: #fff; border: 1px solid #666; font-size: 0.7rem; line-height: 1; cursor: pointer; padding: 0; z-index: 4; }
+  .annotation-delete:hover { background: #666; }
 `
 
 const editorJS = `
@@ -194,14 +199,13 @@ const editorJS = `
     api('POST', '/api/hide', {index: idx, hidden: !isHidden(idx)}).then(load);
   }
 
-  // buildImageEditor builds one step's screenshot + editing toolbar:
-  // Draw Redaction / Draw Highlight (arm a mode, drag to sketch a
-  // rectangle), then adjust it (drag the body to move, drag a corner
-  // handle to resize) before committing with Apply — nothing is sent to
-  // the server until Apply, so a misplaced drag doesn't need to be
-  // corrected after the fact. Undo/Redo/Reset operate on the server's
-  // per-step version history (internal/editor/history.go), which is kept
-  // for the life of this "story edit" process only.
+  // buildImageEditor builds one step's screenshot, its always-live
+  // numbered annotation markers (buildAnnotationElement — draggable,
+  // resizable, renumberable, deletable, committing immediately since
+  // they're non-destructive), and the toolbar for redacting (destructive,
+  // draw -> adjust -> Apply, undo/redo/reset) or adding a new highlight
+  // (non-destructive, same draw -> adjust -> Apply shape, but Apply
+  // creates an annotation instead of baking pixels — see decision #18).
   function buildImageEditor(step) {
     var imgWrap = document.createElement('div');
     imgWrap.className = 'img-wrap';
@@ -237,7 +241,7 @@ const editorJS = `
     overlay.className = 'drag-overlay';
     imgFrame.appendChild(overlay);
 
-    var handles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
+    var drawHandles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
       var h = document.createElement('div');
       h.className = 'resize-handle handle-' + corner;
       h.style.display = 'none';
@@ -245,10 +249,22 @@ const editorJS = `
       return {corner: corner, el: h};
     });
 
+    function placeAnnotations() {
+      imgFrame.querySelectorAll('.annotation').forEach(function(a) { a.remove(); });
+      (step.annotations || []).forEach(function(ann) {
+        imgFrame.appendChild(buildAnnotationElement(img, imgFrame, ann, step.index));
+      });
+    }
+    if (img.complete && img.naturalWidth) {
+      placeAnnotations();
+    } else {
+      img.addEventListener('load', placeAnnotations);
+    }
+
     imgWrap.appendChild(imgFrame);
 
-    setupImageEditing({
-      img: img, imgFrame: imgFrame, overlay: overlay, handles: handles,
+    setupDrawing({
+      img: img, imgFrame: imgFrame, overlay: overlay, handles: drawHandles,
       redactBtn: redactBtn, highlightBtn: highlightBtn,
       applyBtn: applyBtn, cancelBtn: cancelBtn,
       undoBtn: undoBtn, redoBtn: redoBtn, resetBtn: resetBtn,
@@ -265,20 +281,135 @@ const editorJS = `
     return b;
   }
 
-  // setupImageEditing wires up one step's screenshot for the draw ->
-  // adjust -> Apply/Cancel flow, plus Undo/Redo/Reset. All coordinates
-  // are tracked relative to imgFrame — the element that directly and
-  // only wraps the <img> and its overlay/handles, so a pixel measured
-  // relative to imgFrame's top-left lands in exactly the same spot
-  // whether you're computing where the mouse is or where to draw the
-  // overlay. (An earlier version measured the mouse relative to the
-  // <img> itself but positioned the overlay relative to a wrapper that
-  // also contained the toolbar above it — the two disagreed by roughly
-  // the toolbar's height, so every rectangle appeared shifted up from
-  // where it was actually dragged. Giving the frame nothing but the
-  // image and its overlay fixes that by construction, not by hand-tuning
-  // an offset.)
-  function setupImageEditing(el) {
+  // buildAnnotationElement renders one EXISTING annotation as an
+  // always-interactive numbered marker: drag its body to move it, drag a
+  // corner handle to resize it (both committing via /api/annotation/update
+  // as soon as the drag ends — no separate Apply, since editing an
+  // annotation that already exists isn't destructive the way redaction
+  // is), edit the number badge directly, or delete it. Positions convert
+  // between the image's natural pixel space (what the API and annotation
+  // data use) and its on-screen CSS pixel space (what actually needs to
+  // render), using the same img.naturalWidth/clientWidth ratio the
+  // draw-new flow uses.
+  function buildAnnotationElement(img, imgFrame, ann, stepIndex) {
+    var el = document.createElement('div');
+    el.className = 'annotation';
+
+    function place() {
+      var sx = img.clientWidth / img.naturalWidth;
+      var sy = img.clientHeight / img.naturalHeight;
+      el.style.left = (ann.x * sx) + 'px';
+      el.style.top = (ann.y * sy) + 'px';
+      el.style.width = (ann.w * sx) + 'px';
+      el.style.height = (ann.h * sy) + 'px';
+    }
+    place();
+
+    var badge = document.createElement('input');
+    badge.type = 'number';
+    badge.className = 'annotation-badge';
+    badge.value = ann.number;
+    badge.addEventListener('click', function(e) { e.stopPropagation(); });
+    badge.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    el.appendChild(badge);
+
+    var del = document.createElement('button');
+    del.className = 'annotation-delete';
+    del.textContent = '×';
+    del.title = 'Delete this annotation';
+    del.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    del.addEventListener('click', function(e) {
+      e.stopPropagation();
+      api('POST', '/api/annotation/delete', {index: stepIndex, id: ann.id}).then(load)
+        .catch(function(e2) { alert('Delete failed: ' + e2.message); });
+    });
+    el.appendChild(del);
+
+    var handles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
+      var h = document.createElement('div');
+      h.className = 'resize-handle handle-' + corner;
+      h.style.left = (corner.indexOf('w') !== -1 ? '0' : '100%');
+      h.style.top = (corner.indexOf('n') !== -1 ? '0' : '100%');
+      el.appendChild(h);
+      return {corner: corner, el: h};
+    });
+
+    function commit() {
+      var sx = img.naturalWidth / img.clientWidth;
+      var sy = img.naturalHeight / img.clientHeight;
+      var x = el.offsetLeft * sx, y = el.offsetTop * sy;
+      var w = el.offsetWidth * sx, h = el.offsetHeight * sy;
+      var number = parseInt(badge.value, 10);
+      if (isNaN(number)) number = ann.number;
+      ann.x = x; ann.y = y; ann.w = w; ann.h = h; ann.number = number;
+      api('POST', '/api/annotation/update', {index: stepIndex, id: ann.id, x: x, y: y, w: w, h: h, number: number})
+        .catch(function(e) { alert('Update failed: ' + e.message); load(); });
+    }
+
+    var dragging = null;
+    el.addEventListener('mousedown', function(e) {
+      if (e.target !== el) return; // a child (badge/delete/handle) handles its own mousedown
+      e.preventDefault();
+      dragging = {type: 'move', startX: e.clientX, startY: e.clientY, origLeft: el.offsetLeft, origTop: el.offsetTop};
+    });
+    handles.forEach(function(h) {
+      h.el.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dragging = {
+          type: 'resize', corner: h.corner, startX: e.clientX, startY: e.clientY,
+          origLeft: el.offsetLeft, origTop: el.offsetTop, origW: el.offsetWidth, origH: el.offsetHeight,
+        };
+      });
+    });
+    window.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      var dx = e.clientX - dragging.startX, dy = e.clientY - dragging.startY;
+      if (dragging.type === 'move') {
+        el.style.left = (dragging.origLeft + dx) + 'px';
+        el.style.top = (dragging.origTop + dy) + 'px';
+        return;
+      }
+      var left = dragging.origLeft, top = dragging.origTop;
+      var right = dragging.origLeft + dragging.origW, bottom = dragging.origTop + dragging.origH;
+      if (dragging.corner.indexOf('n') !== -1) top = dragging.origTop + dy;
+      if (dragging.corner.indexOf('s') !== -1) bottom = dragging.origTop + dragging.origH + dy;
+      if (dragging.corner.indexOf('w') !== -1) left = dragging.origLeft + dx;
+      if (dragging.corner.indexOf('e') !== -1) right = dragging.origLeft + dragging.origW + dx;
+      el.style.left = Math.min(left, right) + 'px';
+      el.style.top = Math.min(top, bottom) + 'px';
+      el.style.width = Math.abs(right - left) + 'px';
+      el.style.height = Math.abs(bottom - top) + 'px';
+    });
+    window.addEventListener('mouseup', function() {
+      if (!dragging) return;
+      dragging = null;
+      commit();
+    });
+
+    badge.addEventListener('change', commit);
+
+    return el;
+  }
+
+  // setupDrawing wires up the "draw a NEW rectangle" flow shared by both
+  // Draw Redaction and Draw Highlight: arm a mode, drag on the image to
+  // sketch a rectangle, adjust it (move the body, resize from a corner
+  // handle), then Apply — which POSTs to /api/edit-image for redaction
+  // (destructive, pixel-mutating) or /api/annotation for a highlight
+  // (creates a new, subsequently always-editable annotation). Nothing is
+  // sent to the server until Apply either way.
+  //
+  // All coordinates are tracked relative to imgFrame — the element that
+  // directly and only wraps the <img> and its overlay/handles/existing
+  // annotations, so a pixel measured relative to imgFrame's top-left
+  // lands in exactly the same spot whether computing where the mouse is
+  // or where to draw the overlay. (An earlier version measured the mouse
+  // relative to the <img> itself but positioned the overlay relative to a
+  // wrapper that also contained the toolbar above it, so every rectangle
+  // appeared shifted up by roughly the toolbar's height — fixed by
+  // construction here, not by hand-tuning an offset.)
+  function setupDrawing(el) {
     var armedMode = null;
     var pending = null; // {mode, x, y, w, h} in on-screen px, relative to imgFrame
     var dragging = null;
@@ -406,27 +537,24 @@ const editorJS = `
       }
     });
 
-    function refreshImage() {
-      var base = el.img.src.split('?')[0];
-      el.img.src = base + '?t=' + Date.now();
-    }
-
     el.applyBtn.addEventListener('click', function() {
       if (!pending) return;
       var scaleX = el.img.naturalWidth / el.img.clientWidth;
       var scaleY = el.img.naturalHeight / el.img.clientHeight;
-      var payload = {
-        index: el.stepIndex, action: pending.mode,
+      var rect = {
         x: pending.x * scaleX, y: pending.y * scaleY,
         w: pending.w * scaleX, h: pending.h * scaleY,
       };
-      api('POST', '/api/edit-image', payload).then(function() {
+      var request = pending.mode === 'redact'
+        ? api('POST', '/api/edit-image', Object.assign({index: el.stepIndex, action: 'redact'}, rect))
+        : api('POST', '/api/annotation', Object.assign({index: el.stepIndex}, rect));
+      request.then(function() {
         pending = null;
         setArmed(null);
         renderOverlay();
         showApplyBar(false);
         updateButtonStates();
-        refreshImage();
+        load();
       }).catch(function(e) { alert('Edit failed: ' + e.message); });
     });
 
@@ -439,16 +567,16 @@ const editorJS = `
     });
 
     el.undoBtn.addEventListener('click', function() {
-      api('POST', '/api/image-undo', {index: el.stepIndex}).then(refreshImage)
+      api('POST', '/api/image-undo', {index: el.stepIndex}).then(load)
         .catch(function(e) { alert(e.message || 'Nothing to undo.'); });
     });
     el.redoBtn.addEventListener('click', function() {
-      api('POST', '/api/image-redo', {index: el.stepIndex}).then(refreshImage)
+      api('POST', '/api/image-redo', {index: el.stepIndex}).then(load)
         .catch(function(e) { alert(e.message || 'Nothing to redo.'); });
     });
     el.resetBtn.addEventListener('click', function() {
       if (!confirm('Discard all edits made to this screenshot in this editing session?')) return;
-      api('POST', '/api/image-reset', {index: el.stepIndex}).then(refreshImage)
+      api('POST', '/api/image-reset', {index: el.stepIndex}).then(load)
         .catch(function(e) { alert(e.message || 'Nothing to reset.'); });
     });
   }
