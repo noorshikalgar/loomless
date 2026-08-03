@@ -211,6 +211,73 @@ multi-monitor and/or Retina setup to hands-on confirm rather than reason
 about. Flagging rather than claiming "done" — revisit with real hardware
 before treating this as closed.
 
+## 10. Linux capture backend — X11 only, window/screenshot done, click-capture out of scope
+
+Decided 2026-08-03 (closes part of the Phase 1 "cross-platform" gap).
+`internal/capture/window_linux.go` implements `Frontmost`/`List`/
+`Screenshot` for X11 by shelling out to standard tools — `xdotool` for the
+active window and geometry, `xprop` for `WM_CLASS` (the closest X11
+equivalent of "app name"), `wmctrl -lxG` for listing, and `maim -g` for
+region screenshots — mirroring the macOS backend's own approach (no cgo,
+no platform SDK headers, just well-known CLI tools). Automatic
+click-capture is explicitly **not** implemented (`clickhook_linux.go`
+fails loudly with a clear message rather than silently no-op'ing): X11
+needs the XTest/RECORD extension or a privileged input read, Wayland
+restricts global input observation entirely by design, and neither has
+the "shell out to a standard tool" escape hatch the rest of this backend
+uses. `story step`/`capture_step` and `story run`/`run_command` (manual
+capture) work today on Linux; only the automatic click daemon doesn't —
+the existing graceful-degradation path (record start warns and falls back
+to manual-only) already covers this correctly, unchanged.
+
+**How this was actually verified — not just cross-compiled.** No Linux
+machine is available in this environment, but a real X11 session is
+buildable locally: a Debian container (via the Docker/OrbStack already on
+this machine) with `Xvfb` (virtual framebuffer X server), `fluxbox` (a
+minimal window manager — required for `wmctrl`/`xdotool getactivewindow`
+to work at all, since bare Xvfb has no EWMH hints without one), `xdotool`,
+`wmctrl`, `xprop`, and `maim` installed, running a real `xterm` window.
+The actual cross-compiled Linux `story` binary was copied in and run
+directly against that live session — not a simulation.
+
+This caught two real bugs that cross-compilation alone would never have
+surfaced:
+
+1. `windowInfoForID` called `xdotool getwindowclassname`, which doesn't
+   exist — confirmed against `xdotool help`'s actual command list. Fixed
+   by using `xprop -id <id> WM_CLASS` instead (ICCCM's real mechanism for
+   this) and parsing its `"instance", "Class"` output.
+2. Independently, and worse: when window resolution failed (which it did,
+   because of bug #1), `story step` reported success with **no
+   indication anything had gone wrong** — no window, no screenshot, no
+   warning. Traced to `engine.CaptureStep` (`internal/engine/engine.go`),
+   which silently discarded the resolution/screenshot error
+   (`werr`/`capture.Screenshot`'s error) instead of surfacing it, a
+   regression introduced during the Phase 1.5 engine refactor (decision
+   #8) — the pre-refactor CLI code had printed this warning; the
+   extraction into `internal/engine` dropped it. Fixed by giving
+   `CaptureStep` the same `(step, warning, err)` shape `StartRecording`
+   already uses, threaded through both the CLI's `story step` and the MCP
+   `capture_step` tool's output.
+
+Bug #2 is the more important finding: it means a capture failure could
+have been silently invisible on **any** platform, not just Linux — this
+project's own dogfooding on macOS just hadn't hit a window-resolution
+failure recently enough to notice, since Accessibility permission was
+already granted from earlier testing. Re-verified end to end after both
+fixes: `story windows list`, `record start` (correctly warns + falls back
+to manual since click-capture isn't implemented), `story step` (now shows
+`(XTerm — story-linux-test-window)` and saves a real screenshot), `story
+run`, `record stop`, and `export` all confirmed working against the live
+container session — screenshot bytes pulled out and visually inspected,
+not just checked for existence.
+
+**Still unverified:** Wayland (X11-only tools, as documented, will not
+work there at all — no attempt made to test or support it here), and this
+was one specific X11/WM/tool-version combination (Debian bookworm's
+xdotool/wmctrl/maim, fluxbox) — behavior on other distros or window
+managers isn't guaranteed identical.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

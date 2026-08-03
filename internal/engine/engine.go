@@ -83,21 +83,38 @@ func StopRecording() (*session.Session, error) {
 // CaptureStep captures the frontmost window (best-effort) as a step on the
 // current session, with an optional note. Used by both "story step" and
 // the MCP capture_step tool.
-func CaptureStep(note string) (session.Step, error) {
+// CaptureStep's warning return surfaces a non-fatal problem (couldn't
+// resolve the frontmost window, or resolved it but the screenshot itself
+// failed) without making the whole capture an error — a step with just a
+// note and no screenshot is still a useful step. An earlier version of
+// this function discarded these silently (`_ = err`), which meant "story
+// step"/capture_step gave no indication anything had gone wrong even when
+// every step came back with no window/image at all — caught via the Linux
+// backend's container-based testing (docs/product/11-decisions.md #10),
+// where a bug in the Linux window-resolution code was invisible until the
+// warning path was restored.
+func CaptureStep(note string) (step session.Step, warning string, err error) {
 	s, _, err := session.Current()
 	if err != nil {
-		return session.Step{}, err
+		return session.Step{}, "", err
 	}
 
 	win, werr := capture.Frontmost()
 	var image []byte
 	windowApp, windowTitle := "", ""
-	if werr == nil {
+	if werr != nil {
+		warning = fmt.Sprintf("couldn't resolve frontmost window: %v", werr)
+	} else {
 		windowApp, windowTitle = win.App, win.Title
-		image, _ = capture.Screenshot(win) // best-effort — a step without a screenshot is still a useful step
+		image, err = capture.Screenshot(win)
+		if err != nil {
+			warning = fmt.Sprintf("screenshot failed: %v", err)
+			err = nil
+		}
 	}
 
-	return session.AppendStep(s.Name, note, windowApp, windowTitle, image)
+	step, err = session.AppendStep(s.Name, note, windowApp, windowTitle, image)
+	return step, warning, err
 }
 
 // RunCommand executes a command (no shell interpretation — args[0] is the
@@ -202,8 +219,8 @@ func startClickDaemon(name, dir string) error {
 	// started (it needs Accessibility permission) before we tell the
 	// caller everything's fine.
 	time.Sleep(300 * time.Millisecond)
-	if status, err := readLastLine(session.DaemonLogPath(dir)); err == nil && strings.Contains(status, "failed") {
-		return fmt.Errorf("%s", status)
+	if failLine, ok := findFailureLine(session.DaemonLogPath(dir)); ok {
+		return fmt.Errorf("%s", failLine)
 	}
 	return nil
 }
@@ -226,18 +243,31 @@ func stopClickDaemon(dir string) {
 	os.Remove(session.DaemonPIDPath(dir))
 }
 
-func readLastLine(path string) (string, error) {
+// findFailureLine scans the daemon log for a line indicating the click
+// hook failed to start, returning the first match. Deliberately scans the
+// whole file rather than just the last line: main()'s top-level error
+// handler also logs "story: <err>" after the daemon's own "click-daemon:
+// failed: ..." line (both share the daemon's redirected stdout/stderr),
+// so a last-line-only check can land on that generic wrapper line instead
+// — which doesn't contain "failed" — and silently miss a real failure.
+// Caught via the Linux capture backend's container-based verification
+// (docs/product/11-decisions.md #10): the click hook is *always* expected
+// to fail there right now (no Linux click-capture implementation yet, see
+// clickhook_linux.go), which is exactly the case this bug caused
+// "record start" to misreport as "watching_clicks: true."
+func findFailureLine(path string) (line string, found bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", false
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
-	var last string
 	for scanner.Scan() {
-		last = scanner.Text()
+		if strings.Contains(scanner.Text(), "failed") {
+			return scanner.Text(), true
+		}
 	}
-	return last, nil
+	return "", false
 }
 
 // RunClickDaemon is the click-daemon process's entrypoint (relaunched by

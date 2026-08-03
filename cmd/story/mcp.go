@@ -110,14 +110,15 @@ type stepOut struct {
 	WindowApp   string   `json:"window_app,omitempty"`
 	WindowTitle string   `json:"window_title,omitempty"`
 	Masked      []string `json:"masked,omitempty" jsonschema:"Names of secret-masking rules that fired on this step's text, if any."`
+	Warning     string   `json:"warning,omitempty" jsonschema:"Non-fatal problem, e.g. no window/screenshot could be captured — the step was still recorded with just the note."`
 }
 
 func captureStepTool(_ context.Context, _ *mcp.CallToolRequest, in captureStepIn) (*mcp.CallToolResult, stepOut, error) {
-	step, err := engine.CaptureStep(in.Note)
+	step, warning, err := engine.CaptureStep(in.Note)
 	if err != nil {
 		return nil, stepOut{}, err
 	}
-	return nil, stepOut{StepIndex: step.Index, WindowApp: step.WindowApp, WindowTitle: step.WindowTitle, Masked: step.Masked}, nil
+	return nil, stepOut{StepIndex: step.Index, WindowApp: step.WindowApp, WindowTitle: step.WindowTitle, Masked: step.Masked, Warning: warning}, nil
 }
 
 type runCommandIn struct {

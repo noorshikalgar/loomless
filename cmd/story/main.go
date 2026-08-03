@@ -130,7 +130,7 @@ func cmdStep(args []string) error {
 	if len(args) > 0 {
 		note = args[0]
 	}
-	step, err := engine.CaptureStep(note)
+	step, warning, err := engine.CaptureStep(note)
 	if err != nil {
 		return err
 	}
@@ -139,6 +139,9 @@ func cmdStep(args []string) error {
 		fmt.Printf(" (%s — %s)", step.WindowApp, step.WindowTitle)
 	}
 	fmt.Println()
+	if warning != "" {
+		fmt.Fprintln(os.Stderr, "story: warning:", warning)
+	}
 	warnIfMasked(step)
 	return nil
 }

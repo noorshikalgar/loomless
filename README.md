@@ -11,9 +11,10 @@ Claude Code) narrating its own work through an MCP interface.
 
 ## Status
 
-**Phase 1.5 (agent path) done, macOS only.** The human path (click-capture,
-terminal capture, secret-masking, Markdown export) and the agent path (MCP
-server) both work end to end. See
+**Phase 1.5 (agent path) done. macOS: full support. Linux: window/terminal
+capture works (X11 only), automatic click-capture doesn't yet.** The human
+path (click-capture, terminal capture, secret-masking, Markdown export) and
+the agent path (MCP server) both work end to end on macOS. See
 [`docs/product/00-README.md`](docs/product/00-README.md) for the full
 product write-up, [`docs/product/10-open-questions.md`](docs/product/10-open-questions.md)
 for what's still undecided, and [`docs/product/11-decisions.md`](docs/product/11-decisions.md)
@@ -21,8 +22,8 @@ for what's already resolved and why (capture engine: **Go**; accounts:
 **optional/local-first**; editing model: **mutable with activity log**;
 screenshots: **window-scoped, not full-screen**; terminal capture: **explicit
 `story run` wrapper, not a full shell hook**; secrets: **pattern-masked at
-capture time**). Not done: cross-platform (macOS only right now), PDF/slide
-export, sharing — all later phases.
+capture time**; Linux: **X11 via standard tools, no click-capture yet**).
+Not done: Windows, Wayland, PDF/slide export, sharing — all later phases.
 
 ## Why
 
@@ -52,24 +53,31 @@ order:
 10. [**Open questions**](docs/product/10-open-questions.md) — the decisions
     that gate everything else
 
-## Try it (macOS only)
+## Try it
 
-The core loop: `record start` watches your clicks automatically (a
-listen-only macOS event tap — it observes, never intercepts) and captures a
+The core loop: on macOS, `record start` watches your clicks automatically
+(a listen-only event tap — it observes, never intercepts) and captures a
 window-scoped, click-highlighted screenshot per click (not full-screen —
 see [`docs/product/11-decisions.md`](docs/product/11-decisions.md) #5). Add
 notes without a click via `story step`, or capture a command + its output
-via `story run`.
+via `story run` — both work the same way on Linux (X11), just without the
+automatic click part (decision #10) — use `story step`/`story run` there
+instead.
 
 ```bash
 go build -o story ./cmd/story
 ./story record start my-first-story
-# click around normally — each click is captured automatically
+# macOS: click around normally — each click is captured automatically
 ./story step "optional note, no click needed"
 ./story run -- go test ./...     # captures the command + its output as a step
 ./story record stop
 ./story export my-first-story
 ```
+
+**Linux (X11) dependencies:** `xdotool`, `wmctrl`, `xprop` (usually
+preinstalled), and [`maim`](https://github.com/naelstrof/maim) for
+screenshots — e.g. `apt install xdotool wmctrl x11-utils maim`. Wayland
+isn't supported (these are all X11-protocol tools).
 
 Notes, window titles, and `story run` commands/output are pattern-matched
 for common secret shapes (API keys, tokens, `password=...`-style
