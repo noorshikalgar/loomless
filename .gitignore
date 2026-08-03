@@ -13,6 +13,7 @@ Thumbs.db
 # --- Go (capture engine candidate) ---
 /bin/
 /dist/
+/story
 *.exe
 *.test
 *.out
