@@ -167,6 +167,50 @@ stop_recording → generate_story sequence, and confirmed a fake secret
 in `run_command`'s output came back masked in both the tool result and
 the final generated Markdown.
 
+## 9. Multi-monitor / high-DPI — reasoned correct by design, not hardware-verified
+
+Reviewed 2026-08-03 (open question #7). This resolves to "should already
+work, not confirmed on real hardware" rather than a clean yes/no, because
+the dev machine used for every capture test in this project has exactly
+one external display (2560×1440, 1:1 scale — not even Retina). There's no
+second monitor or HiDPI panel attached to actually exercise either path
+against.
+
+Why it should already be correct, by construction, without needing
+monitor-specific code:
+
+- `capture.WindowInfo.X/Y/W/H` (`internal/capture/window_darwin.go`) come
+  straight from AppleScript/System Events' `position`/`size` of the
+  window, which macOS reports in **global** screen-point coordinates —
+  the same virtual coordinate space that spans every connected display,
+  not display-relative coordinates. A window on a second monitor
+  positioned to the right of the main one just has an X coordinate
+  greater than the main display's width; one positioned above/left can
+  have negative coordinates. Nothing in our code assumes a single
+  display's bounds.
+- `capture.Screenshot` (same file) calls `screencapture -x -o -R
+  x,y,w,h` with those same global coordinates, and deliberately never
+  passes `-m` ("only capture the main monitor") or `-D <n>` (a specific
+  display index) — confirmed via `man screencapture` — so `-R`'s region
+  resolution is left to macOS itself, which already has to solve
+  "which physical display(s) does this global rectangle fall on, and at
+  what backing scale factor" for its own window manager. We're not
+  reimplementing any of that math — see decision #5's implementation
+  note, which chose `-R` over manual pixel-cropping for exactly this
+  reason.
+- The one real gap this reasoning doesn't cover: a window straddling two
+  displays with *different* backing scale factors (e.g. half on a Retina
+  laptop panel, half on a non-Retina external one) would hand
+  `screencapture` a region spanning two different pixel densities. What
+  it does with that isn't something `man screencapture` documents, and
+  it's a genuinely rare window position — not worth engineering around
+  speculatively.
+
+**Known verification gap, stated plainly:** this needs an actual
+multi-monitor and/or Retina setup to hands-on confirm rather than reason
+about. Flagging rather than claiming "done" — revisit with real hardware
+before treating this as closed.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
