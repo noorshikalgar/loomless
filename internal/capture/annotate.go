@@ -59,6 +59,69 @@ func Highlight(pngData []byte, relX, relY, windowWidthPts, windowHeightPts float
 	return out.Bytes(), nil
 }
 
+// Redact permanently fills a rectangular region with solid black, given in
+// the image's own pixel coordinates (not points — unlike Highlight, this
+// operates on an already-saved screenshot in the local editor, not a live
+// window capture, so there's no point-to-pixel scale factor to convert).
+// Solid fill, not blur: per docs/product/06-editing-and-versioning.md's
+// redaction carve-out, the covered content must actually be unrecoverable,
+// not just visually obscured — a blur can sometimes be reversed with
+// enough effort, a solid overwrite of the pixel data cannot.
+func Redact(pngData []byte, x, y, w, h float64) ([]byte, error) {
+	return fillRect(pngData, x, y, w, h, color.RGBA{R: 0, G: 0, B: 0, A: 255}, true)
+}
+
+// DrawBoxHighlight draws a rectangular outline (not a solid fill) at the
+// given pixel coordinates — the manual, user-placed equivalent of
+// Highlight's automatic circular click marker, for marking up a
+// screenshot after the fact in the local editor rather than at click time.
+func DrawBoxHighlight(pngData []byte, x, y, w, h float64) ([]byte, error) {
+	return fillRect(pngData, x, y, w, h, highlightColor, false)
+}
+
+// fillRect decodes a PNG, fills (solid=true) or outlines (solid=false) the
+// given pixel rectangle, and re-encodes. Shared by Redact and
+// DrawBoxHighlight since they differ only in whether the rectangle's
+// interior gets painted or just its border.
+func fillRect(pngData []byte, x, y, w, h float64, c color.RGBA, solid bool) ([]byte, error) {
+	img, err := png.Decode(bytes.NewReader(pngData))
+	if err != nil {
+		return nil, fmt.Errorf("decode image: %w", err)
+	}
+	bounds := img.Bounds()
+	rgba := image.NewRGBA(bounds)
+	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+
+	const borderThickness = 4
+	minX, minY := int(math.Round(x)), int(math.Round(y))
+	maxX, maxY := int(math.Round(x+w)), int(math.Round(y+h))
+	for py := minY; py < maxY; py++ {
+		if py < bounds.Min.Y || py >= bounds.Max.Y {
+			continue
+		}
+		for px := minX; px < maxX; px++ {
+			if px < bounds.Min.X || px >= bounds.Max.X {
+				continue
+			}
+			if solid {
+				rgba.Set(px, py, c)
+				continue
+			}
+			onBorder := px < minX+borderThickness || px >= maxX-borderThickness ||
+				py < minY+borderThickness || py >= maxY-borderThickness
+			if onBorder {
+				rgba.Set(px, py, c)
+			}
+		}
+	}
+
+	var out bytes.Buffer
+	if err := png.Encode(&out, rgba); err != nil {
+		return nil, fmt.Errorf("encode edited image: %w", err)
+	}
+	return out.Bytes(), nil
+}
+
 // drawRing fills a circular ring (outer radius r, given thickness) centered
 // at (cx, cy). A plain distance check rather than a proper anti-aliased
 // stroke — sufficient for a "here's roughly where I clicked" marker.

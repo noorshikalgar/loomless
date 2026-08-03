@@ -113,6 +113,25 @@ func NewHandler(name string) (http.Handler, error) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("POST /api/edit-image", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index  int     `json:"index"`
+			Action string  `json:"action"` // "redact" | "highlight"
+			X      float64 `json:"x"`
+			Y      float64 `json:"y"`
+			W      float64 `json:"w"`
+			H      float64 `json:"h"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.EditImage(name, body.Index, body.Action, body.X, body.Y, body.W, body.H); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	return mux, nil
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/noorshikalgar/story/internal/capture"
 	"github.com/noorshikalgar/story/internal/mask"
 )
 
@@ -530,6 +531,72 @@ func EditNote(name string, stepIndex int, newNote string) (*Session, error) {
 	s.EditLog = append(s.EditLog, EditEntry{
 		Timestamp: time.Now(), Action: "edit_note", StepIndex: stepIndex,
 		OldValue: oldNote, NewValue: maskedNote,
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// EditImage reloads the named session and permanently redacts (solid
+// black fill — the content must be genuinely unrecoverable, not just
+// hidden) or highlights (colored outline) a rectangular region of a
+// step's screenshot, given in the image's own pixel coordinates. This is
+// the one deliberate exception to "capture-time data is never mutated"
+// (decision #4): redaction only works if the original pixels are actually
+// gone, so the image file itself is overwritten in place — but the edit
+// is still logged (what happened and where, never the covered content
+// itself, which was never retained anywhere to leak) per
+// docs/product/06-editing-and-versioning.md's redaction carve-out.
+func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*Session, error) {
+	if action != "redact" && action != "highlight" {
+		return nil, fmt.Errorf("unknown image edit action %q (want redact or highlight)", action)
+	}
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("rectangle must have positive width and height")
+	}
+
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	var target *Step
+	for i := range s.Steps {
+		if s.Steps[i].Index == stepIndex {
+			target = &s.Steps[i]
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	}
+	if target.ImageFile == "" {
+		return nil, fmt.Errorf("step %d has no screenshot to edit", stepIndex)
+	}
+
+	imgPath := filepath.Join(dir, target.ImageFile)
+	data, err := os.ReadFile(imgPath)
+	if err != nil {
+		return nil, fmt.Errorf("read image: %w", err)
+	}
+
+	var edited []byte
+	if action == "redact" {
+		edited, err = capture.Redact(data, x, y, w, h)
+	} else {
+		edited, err = capture.DrawBoxHighlight(data, x, y, w, h)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(imgPath, edited, 0o644); err != nil {
+		return nil, fmt.Errorf("write edited image: %w", err)
+	}
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "image_" + action, StepIndex: stepIndex,
+		NewValue: fmt.Sprintf("rect(%.0f,%.0f,%.0f,%.0f)", x, y, w, h),
 	})
 	if err := save(dir, s); err != nil {
 		return nil, err

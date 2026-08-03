@@ -36,9 +36,18 @@ const editorCSS = `
   .save-row button:hover { background: #366e46; }
   .saved-hint { color: #7ee787; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; }
   .saved-hint.show { opacity: 1; }
-  img { max-width: 100%; border-radius: 4px; margin-top: 0.5rem; }
+  img { max-width: 100%; border-radius: 4px; display: block; }
   pre { background: #17171a; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; margin: 0.4rem 0; }
   pre.cmd { color: #7ee787; }
+  .img-wrap { position: relative; margin-top: 0.5rem; }
+  .img-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+  .img-toolbar button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; }
+  .img-toolbar button.armed.redact-btn { background: #7a2a2a; border-color: #a03c3c; }
+  .img-toolbar button.armed.highlight-btn { background: #7a5a1a; border-color: #a07c2c; }
+  .mode-hint { color: #999; font-size: 0.8rem; }
+  .drag-overlay { position: absolute; display: none; pointer-events: none; border: 2px dashed #fff; box-sizing: border-box; }
+  .drag-overlay.redact { border-color: #ff5a5a; background: rgba(255, 0, 0, 0.15); }
+  .drag-overlay.highlight { border-color: #ffb020; background: rgba(255, 176, 32, 0.15); }
 `
 
 const editorJS = `
@@ -145,10 +154,35 @@ const editorJS = `
         el.appendChild(row);
 
         if (step.image_file) {
+          var imgWrap = document.createElement('div');
+          imgWrap.className = 'img-wrap';
+
+          var toolbar = document.createElement('div');
+          toolbar.className = 'img-toolbar';
+          var redactBtn = document.createElement('button');
+          redactBtn.className = 'redact-btn';
+          redactBtn.textContent = 'Draw Redaction';
+          var highlightBtn = document.createElement('button');
+          highlightBtn.className = 'highlight-btn';
+          highlightBtn.textContent = 'Draw Highlight';
+          var modeHint = document.createElement('span');
+          modeHint.className = 'mode-hint';
+          toolbar.appendChild(redactBtn);
+          toolbar.appendChild(highlightBtn);
+          toolbar.appendChild(modeHint);
+          imgWrap.appendChild(toolbar);
+
           var img = document.createElement('img');
           img.src = '/images/' + step.image_file.split('/').pop();
           img.alt = 'Step ' + step.index + ' screenshot';
-          el.appendChild(img);
+          imgWrap.appendChild(img);
+
+          var overlay = document.createElement('div');
+          overlay.className = 'drag-overlay';
+          imgWrap.appendChild(overlay);
+
+          el.appendChild(imgWrap);
+          setupImageEditing(img, overlay, redactBtn, highlightBtn, modeHint, step.index);
         }
       }
 
@@ -179,6 +213,84 @@ const editorJS = `
 
   function toggleHidden(idx) {
     api('POST', '/api/hide', {index: idx, hidden: !isHidden(idx)}).then(load);
+  }
+
+  // setupImageEditing wires one step's screenshot up for click-and-drag
+  // redaction/highlighting. "Armed" mode: clicking Redact or Highlight
+  // arms that mode (crosshair cursor, button visually marked active);
+  // the next drag on the image performs it and disarms automatically —
+  // deliberately single-shot per click rather than a persistent toggle,
+  // so it's always unambiguous which mode (if any) is currently armed
+  // when there are several steps' images on the page at once.
+  function setupImageEditing(img, overlay, redactBtn, highlightBtn, modeHint, stepIndex) {
+    var armedMode = null;
+    var dragStart = null;
+
+    function setArmed(mode) {
+      armedMode = mode;
+      img.style.cursor = mode ? 'crosshair' : 'default';
+      modeHint.textContent = mode ? ('Drag on the image to draw a ' + mode + '.') : '';
+      redactBtn.classList.toggle('armed', mode === 'redact');
+      highlightBtn.classList.toggle('armed', mode === 'highlight');
+    }
+
+    redactBtn.addEventListener('click', function() { setArmed(armedMode === 'redact' ? null : 'redact'); });
+    highlightBtn.addEventListener('click', function() { setArmed(armedMode === 'highlight' ? null : 'highlight'); });
+
+    function pos(e) {
+      var rect = img.getBoundingClientRect();
+      return {x: e.clientX - rect.left, y: e.clientY - rect.top};
+    }
+
+    function updateOverlay(a, b) {
+      overlay.style.left = Math.min(a.x, b.x) + 'px';
+      overlay.style.top = Math.min(a.y, b.y) + 'px';
+      overlay.style.width = Math.abs(a.x - b.x) + 'px';
+      overlay.style.height = Math.abs(a.y - b.y) + 'px';
+    }
+
+    img.addEventListener('mousedown', function(e) {
+      if (!armedMode) return;
+      e.preventDefault();
+      dragStart = pos(e);
+      overlay.className = 'drag-overlay ' + armedMode;
+      overlay.style.display = 'block';
+      updateOverlay(dragStart, dragStart);
+    });
+
+    window.addEventListener('mousemove', function(e) {
+      if (!dragStart) return;
+      updateOverlay(dragStart, pos(e));
+    });
+
+    window.addEventListener('mouseup', function(e) {
+      if (!dragStart) return;
+      var cur = pos(e);
+      var x0 = Math.min(dragStart.x, cur.x), y0 = Math.min(dragStart.y, cur.y);
+      var w = Math.abs(dragStart.x - cur.x), h = Math.abs(dragStart.y - cur.y);
+      var mode = armedMode;
+      dragStart = null;
+      overlay.style.display = 'none';
+      setArmed(null);
+
+      if (w < 4 || h < 4) return; // ignore accidental clicks/tiny drags
+
+      // The <img> is often displayed smaller than its natural size (CSS
+      // max-width: 100%); convert the drag's on-screen coordinates to the
+      // image's real pixel coordinates, which is what the API/PNG edit
+      // operates in.
+      var scaleX = img.naturalWidth / img.clientWidth;
+      var scaleY = img.naturalHeight / img.clientHeight;
+      api('POST', '/api/edit-image', {
+        index: stepIndex, action: mode,
+        x: x0 * scaleX, y: y0 * scaleY, w: w * scaleX, h: h * scaleY,
+      }).then(function() {
+        // Same filename, new bytes — force a real re-fetch instead of
+        // whatever the browser has cached.
+        var base = img.src.split('?')[0];
+        img.src = base + '?t=' + Date.now();
+      }).catch(function(e) { alert('Edit failed: ' + e.message); });
+    });
   }
 
   load();

@@ -522,6 +522,61 @@ in the original click-capture work — but "the flag reaches the process"
 and "a real click respects the flag" are different claims, and only the
 first is confirmed here.
 
+## 16. Screenshot redaction + manual highlight — combined into one image-editing pass
+
+Decided 2026-08-03, following on from decision #15's user question about
+configurability, and closing the follow-up flagged when the local editor
+first shipped (decision #14). Redaction (hide something sensitive) and
+manual highlighting (draw attention to something) are opposite intents
+but identical mechanics — click-and-drag a rectangle on a screenshot in
+`story edit` — so they shipped together rather than as separate passes.
+
+- `capture.Redact(pngData, x, y, w, h)`: solid black fill. Deliberately
+  solid, not blur — per `06-editing-and-versioning.md`'s redaction
+  carve-out, covered content must be genuinely unrecoverable, and a blur
+  is sometimes reversible with enough effort where an overwrite isn't.
+- `capture.DrawBoxHighlight(pngData, x, y, w, h)`: outline only, reusing
+  the same red (`highlightColor`) as the automatic click-ring marker —
+  the manual, user-placed equivalent of that automatic one.
+- `session.EditImage`: the one deliberate exception to "capture-time data
+  is never mutated" (decision #4) — redaction only works if the original
+  pixels are actually gone, so the image file is overwritten in place.
+  Still logged to `EditLog` (what happened, the rectangle, never the
+  covered content — which was never retained anywhere to leak).
+- Editor UI: click "Draw Redaction" or "Draw Highlight" to arm that mode
+  (crosshair cursor, button highlighted), then drag on the image. Single-
+  shot and auto-disarming after one rectangle, rather than a persistent
+  toggle — stays unambiguous which mode is armed with several steps'
+  images on one page. Drag coordinates convert from displayed (CSS,
+  often scaled down) pixels to the image's natural pixel space before
+  hitting the API.
+
+**Verified three ways, escalating rigor:**
+
+1. Real unit tests (`internal/capture/annotate_test.go`) proving the
+   *distinction* the two operations exist for: `Redact` fills the entire
+   rectangle solid black and leaves everything outside it byte-for-byte
+   unchanged; `DrawBoxHighlight` paints only a border and leaves the
+   rectangle's interior untouched — if a highlight ever accidentally
+   filled solid, it would be indistinguishable from a redaction, which
+   would defeat the reason both exist. Both passed first try.
+2. Interactively, through the actual Browser tool against a real editor
+   server: armed redact, dragged a box, confirmed a solid black region
+   rendered in place, confirmed `EditLog` recorded `image_redact` with
+   the rectangle; armed highlight, dragged a larger box around the same
+   area, confirmed a red outline rendered around (not over) the existing
+   redaction — proving sequential edits to the same image compose
+   correctly, since each `EditImage` call reads the current on-disk
+   bytes rather than the original.
+3. **Independent pixel verification**: read the actual saved PNG off
+   disk with Pillow (a tool with no connection to this project's own
+   code, so it can't share a bug with it) and confirmed the redacted
+   region's pixels are genuinely `(0, 0, 0, 255)` — not just "looked
+   black in a browser screenshot," which a CSS overlay or a rendering
+   artifact could also produce. This is the actual bar redaction has to
+   clear: real unrecoverable pixels, verified by something outside the
+   system under test.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
