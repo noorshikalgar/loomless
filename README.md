@@ -46,26 +46,29 @@ order:
 10. [**Open questions**](docs/product/10-open-questions.md) — the decisions
     that gate everything else
 
-## Try it (Phase 0 — macOS only)
+## Try it (macOS only)
 
-The Phase 0 spike proves the core loop: record a session, capture
-window-scoped steps (not full-screen — see
-[`docs/product/11-decisions.md`](docs/product/11-decisions.md) #5), export
-to Markdown. No click-hooking, terminal capture, or agent/MCP interface yet
-— those are Phase 1/1.5.
+The core loop: `record start` watches your clicks automatically (a
+listen-only macOS event tap — it observes, never intercepts) and captures
+a window-scoped screenshot per click (not full-screen — see
+[`docs/product/11-decisions.md`](docs/product/11-decisions.md) #5). Add
+notes without a click via `story step`. No terminal capture, annotations,
+or agent/MCP interface yet — those are next.
 
 ```bash
 go build -o story ./cmd/story
 ./story record start my-first-story
-./story step "optional note describing this step"   # captures the frontmost window
+# click around normally — each click is captured automatically
+./story step "optional note, no click needed"
 ./story record stop
 ./story export my-first-story
 ```
 
-Output lands in `~/.story/sessions/my-first-story/`. First run will prompt
-for **Screen Recording** permission (System Settings → Privacy & Security)
-for whichever terminal app you're running it from — that's a one-time
-macOS system prompt, expected per
+Output lands in `~/.story/sessions/my-first-story/`. First run prompts for
+**Accessibility** (to watch clicks and resolve window info) and **Screen
+Recording** (to take the screenshots) — System Settings → Privacy &
+Security, granted to whichever terminal app you're running it from. Both
+are one-time macOS system prompts, expected per
 [`docs/product/07-edge-cases.md`](docs/product/07-edge-cases.md).
 
 ## Contributing
