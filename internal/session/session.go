@@ -58,6 +58,18 @@ func imagesDir(dir string) string {
 	return filepath.Join(dir, "images")
 }
 
+// DaemonPIDPath and DaemonLogPath locate the click-capture daemon's
+// bookkeeping files for a session, so "record start" and "record stop"
+// (which run as separate short-lived processes) agree on where to find
+// them without passing state between them.
+func DaemonPIDPath(dir string) string {
+	return filepath.Join(dir, "daemon.pid")
+}
+
+func DaemonLogPath(dir string) string {
+	return filepath.Join(dir, "daemon.log")
+}
+
 // currentPath points at the session name that "story step" / "story record
 // stop" act on when no name is given explicitly.
 func currentPath() (string, error) {
@@ -151,6 +163,19 @@ func save(dir string, s *Session) error {
 		return fmt.Errorf("write session: %w", err)
 	}
 	return nil
+}
+
+// AppendStep reloads a session by name from disk, appends one step, and
+// saves — narrowing (not eliminating) the race window when the click
+// daemon and a manual "story step" might write concurrently, since each
+// append starts from the latest on-disk state rather than a stale
+// in-memory copy.
+func AppendStep(name, note, windowApp, windowTitle string, image []byte) (Step, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return Step{}, err
+	}
+	return s.AddStep(dir, note, windowApp, windowTitle, image)
 }
 
 // AddStep appends a step, writes the screenshot bytes (if any) alongside
