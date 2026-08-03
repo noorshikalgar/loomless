@@ -26,6 +26,16 @@ import (
 // moment into a single step, per docs/product/07-edge-cases.md.
 const clickDebounce = 300 * time.Millisecond
 
+func clamp(v, min, max float64) float64 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -231,7 +241,18 @@ func runClickDaemon(args []string) error {
 		var image []byte
 		if err == nil {
 			windowApp, windowTitle = win.App, win.Title
-			image, _ = capture.Screenshot(win) // best-effort; missing Screen Recording permission shouldn't kill the daemon
+			shot, serr := capture.Screenshot(win) // best-effort; missing Screen Recording permission shouldn't kill the daemon
+			if serr == nil {
+				// Window may have moved/resized between the click and this
+				// Frontmost() lookup; clamp so the marker stays on-image
+				// instead of drawing off the edge.
+				relX := clamp(x-win.X, 0, win.W)
+				relY := clamp(y-win.Y, 0, win.H)
+				if annotated, aerr := capture.Highlight(shot, relX, relY, win.W, win.H); aerr == nil {
+					shot = annotated
+				}
+				image = shot
+			}
 		}
 		if _, err := session.AppendStep(name, "", windowApp, windowTitle, image); err != nil {
 			fmt.Println("append step failed:", err)
