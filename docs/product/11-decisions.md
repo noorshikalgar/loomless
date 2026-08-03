@@ -1025,6 +1025,55 @@ Escape to cancel without saving.
    untouched step in the same session still fell back to its default
    "Step N" heading correctly.
 
+## 21. Step headings number by display position; click-highlight ring off by default
+
+Decided 2026-08-03. Two small, unrelated fixes from the same feedback
+round as #20, bundled here since both are display/default changes with
+no shared code.
+
+**Step numbering follows display position, not capture index.** Reported
+directly: reordering steps in the editor didn't renumber the "Step N"
+headings — a step moved to the top of the list kept showing whatever
+number it originally captured at. The default heading (used whenever
+`Step.Title` is empty) is now computed from the step's 1-indexed position
+in the *current* order, not `Step.Index` — `Index` stays exactly what
+decision #4 established (a stable, never-reassigned capture-time
+reference used for image/output filenames, EditLog targeting, and the
+annotation API), this only changes what number gets displayed when no
+custom title overrides it. Applied in both `internal/export`'s
+`stepHeading(step, position)` (position = the step's index within
+`VisibleSteps()`, +1) and the editor's `buildStepTitle`/`buildImageEditor`
+(position = index within the visible steps of the current display order —
+hidden steps don't consume a number, matching that they're excluded from
+`VisibleSteps()` and therefore don't appear in any export at all).
+Verified: reordered two steps in a live editor session, confirmed the
+headings swapped to match new position; exported to Markdown and
+confirmed the `##` headings matched the editor's numbers exactly, in the
+new order.
+
+**Click-highlight ring is now off by default.** Decision #15 added the
+on/off toggle but defaulted it on ("more often useful than not"); direct
+feedback reversed that assessment ("not useful at all"). Kept as an
+explicit opt-in rather than removed outright, per "keep it optional if
+possible" — `story record start <name> --highlight` (was
+`--no-highlight` to opt *out*; now `--highlight` to opt *in*, same flag
+name repurposed for the opposite polarity since the meaning "the flag
+that's present when you want the ring" stays true either way) and the MCP
+`start_recording` tool's `highlight_clicks: true` (renamed from
+`no_highlight`, since a double-negative default is worse API ergonomics
+than a plain opt-in bool). The actual ring-drawing logic
+(`AddAnnotation` from the click daemon) didn't change at all — only the
+default value threaded through `StartRecording`/`startClickDaemon` at
+every call site. Verified: `go build/vet/gofmt` clean; confirmed by
+reading through every call site that used to hardcode `true` (CLI
+`recordStart`, the `__click-daemon` hidden subcommand, MCP's tool
+handler) — all three now default `false` and only flip to `true` when the
+respective flag/field is explicitly set. Not independently re-verified
+via a live click (same standing limitation as decisions #15/#17/#18/#19 —
+this environment can't synthesize a real OS-level click), but the code
+path a real click goes through is unchanged from decision #15's own
+verification, only the default feeding into it changed.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

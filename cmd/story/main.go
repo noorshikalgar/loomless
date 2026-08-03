@@ -102,19 +102,22 @@ func cmdRecord(args []string) error {
 
 func recordStart(args []string) error {
 	name := ""
-	highlightClicks := true
+	// Off by default (decision #21: the automatic red-ring annotation
+	// on every click-captured screenshot turned out not to be useful in
+	// practice) — pass --highlight to opt back in.
+	highlightClicks := false
 	for _, a := range args {
-		if a == "--no-highlight" {
-			highlightClicks = false
+		if a == "--highlight" {
+			highlightClicks = true
 			continue
 		}
 		if name != "" {
-			return fmt.Errorf("usage: story record start <name> [--no-highlight]")
+			return fmt.Errorf("usage: story record start <name> [--highlight]")
 		}
 		name = a
 	}
 	if name == "" {
-		return fmt.Errorf("usage: story record start <name> [--no-highlight]")
+		return fmt.Errorf("usage: story record start <name> [--highlight]")
 	}
 
 	dir, watching, warning, err := engine.StartRecording(name, highlightClicks)
@@ -128,9 +131,9 @@ func recordStart(args []string) error {
 		return nil
 	}
 	if highlightClicks {
-		fmt.Println("Watching clicks — use 'story step \"note\"' to add notes without a click.")
+		fmt.Println("Watching clicks (highlight ring enabled) — use 'story step \"note\"' to add notes without a click.")
 	} else {
-		fmt.Println("Watching clicks (highlight ring disabled) — use 'story step \"note\"' to add notes without a click.")
+		fmt.Println("Watching clicks — use 'story step \"note\"' to add notes without a click.")
 	}
 	return nil
 }
@@ -148,12 +151,12 @@ func recordStop() error {
 // see engine.RunClickDaemon.
 func runClickDaemon(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story __click-daemon <session-name> [--no-highlight]")
+		return fmt.Errorf("usage: story __click-daemon <session-name> [--highlight]")
 	}
-	highlightClicks := true
+	highlightClicks := false
 	for _, a := range args[1:] {
-		if a == "--no-highlight" {
-			highlightClicks = false
+		if a == "--highlight" {
+			highlightClicks = true
 		}
 	}
 	return engine.RunClickDaemon(args[0], highlightClicks, func(format string, a ...any) {

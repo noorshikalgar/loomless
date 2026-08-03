@@ -74,7 +74,7 @@ instead.
 
 ```bash
 go build -o story ./cmd/story
-./story record start my-first-story           # add --no-highlight to skip the click-ring annotation
+./story record start my-first-story           # add --highlight to draw a ring on click-captured screenshots
 # macOS: click around normally — each click is captured automatically
 ./story step "optional note, no click needed"
 ./story run -- go test ./...     # captures the command + its output as a step

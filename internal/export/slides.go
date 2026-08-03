@@ -37,9 +37,10 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 	fmt.Fprintf(&b, "<p class=\"hint\">%d step(s) — use arrow keys or the buttons below</p>\n", len(steps))
 	b.WriteString("</section>\n")
 
-	for _, step := range steps {
+	for i, step := range steps {
+		position := i + 1
 		b.WriteString("<section class=\"slide\">\n")
-		fmt.Fprintf(&b, "<h2>%s</h2>\n", html.EscapeString(stepHeading(step)))
+		fmt.Fprintf(&b, "<h2>%s</h2>\n", html.EscapeString(stepHeading(step, position)))
 
 		if step.Command != "" {
 			fmt.Fprintf(&b, "<pre class=\"cmd\">$ %s</pre>\n", html.EscapeString(step.Command))
@@ -62,7 +63,7 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 			}
 			if step.ImageFile != "" {
 				if dataURI, err := imageDataURI(dir, step); err == nil {
-					fmt.Fprintf(&b, "<img src=\"%s\" alt=\"Step %d screenshot\">\n", dataURI, step.Index)
+					fmt.Fprintf(&b, "<img src=\"%s\" alt=\"Step %d screenshot\">\n", dataURI, position)
 				} else {
 					fmt.Fprintf(&b, "<p class=\"exit\">[screenshot missing: %s]</p>\n", html.EscapeString(step.ImageFile))
 				}

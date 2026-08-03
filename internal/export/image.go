@@ -11,13 +11,20 @@ import (
 )
 
 // stepHeading returns a step's display title — the user-editable
-// override (session.Step.Title) if one is set, otherwise the default
-// "Step <Index>" every exporter used before titles were editable.
-func stepHeading(step session.Step) string {
+// override (session.Step.Title) if one is set, otherwise "Step
+// <position>". position is the step's 1-indexed place in the *current
+// display order* (VisibleSteps()'s order), not step.Index — Index is a
+// stable capture-time reference (decision #4: image/output filenames,
+// EditLog targeting, and the annotation API all address a step by it,
+// and it must never change once assigned) but that means it doesn't
+// track reordering. A story reordered to (B, A, C) should read "Step 1,
+// Step 2, Step 3" in that order, not the frozen indices B/A/C happened
+// to capture in.
+func stepHeading(step session.Step, position int) string {
 	if step.Title != "" {
 		return step.Title
 	}
-	return fmt.Sprintf("Step %d", step.Index)
+	return fmt.Sprintf("Step %d", position)
 }
 
 // toCaptureAnnotations adapts session.Annotation to capture.Annotation —

@@ -84,8 +84,8 @@ func runMCPServer(ctx context.Context) error {
 }
 
 type startRecordingIn struct {
-	Name        string `json:"name" jsonschema:"A short, filesystem-safe name for this session, e.g. 'fix-pagination-bug'."`
-	NoHighlight bool   `json:"no_highlight,omitempty" jsonschema:"Set true to disable the red-ring annotation on click-captured screenshots. Default false (highlighted)."`
+	Name            string `json:"name" jsonschema:"A short, filesystem-safe name for this session, e.g. 'fix-pagination-bug'."`
+	HighlightClicks bool   `json:"highlight_clicks,omitempty" jsonschema:"Set true to draw a red-ring annotation on click-captured screenshots. Default false (off) — most workflows don't need it."`
 }
 
 type startRecordingOut struct {
@@ -98,7 +98,7 @@ func startRecordingTool(_ context.Context, _ *mcp.CallToolRequest, in startRecor
 	if in.Name == "" {
 		return nil, startRecordingOut{}, fmt.Errorf("name is required")
 	}
-	dir, watching, warning, err := engine.StartRecording(in.Name, !in.NoHighlight)
+	dir, watching, warning, err := engine.StartRecording(in.Name, in.HighlightClicks)
 	if err != nil {
 		return nil, startRecordingOut{}, err
 	}

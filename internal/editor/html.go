@@ -99,7 +99,15 @@ const editorCSS = `
   .window-line { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; margin-bottom: 0.5rem; }
   .window-line span { cursor: text; color: #8ab4ff; font-weight: 600; }
   .window-line span:hover { text-decoration: underline dotted; text-underline-offset: 2px; }
-  .window-line input { font-size: 0.9rem; font-weight: 600; color: #8ab4ff; background: #17171a; border: 1px solid #444; border-radius: 4px; padding: 0.1rem 0.35rem; font-family: inherit; }
+  .window-line input { font-size: 0.9rem; background: #17171a; border: 1px solid #444; border-radius: 4px; padding: 0.1rem 0.35rem; font-family: inherit; }
+  /* App and window-title fields deliberately don't look like clones of
+     each other: same visual split as the display-mode text (bold/blue
+     app, plain/gray title), a dash between them so it reads as one
+     "App — Title" line being edited, and different widths since they're
+     conceptually different-length fields. */
+  .window-line input.window-app-input { font-weight: 600; color: #8ab4ff; width: 8rem; }
+  .window-line input.window-title-input { font-weight: normal; color: #ccc; flex: 1; min-width: 0; }
+  .window-line-sep { color: #666; }
 `
 
 const editorJS = `
@@ -166,16 +174,27 @@ const editorJS = `
     stepEditors = {};
     var order = fullOrder();
 
+    var visiblePos = 0;
     order.forEach(function(idx, pos) {
       var step = stepByIndex(idx);
       if (!step) return;
+      var hidden = isHidden(idx);
+      if (!hidden) visiblePos++;
+      // The default "Step N" heading numbers by position among VISIBLE
+      // steps in the CURRENT display order (matching exactly what the
+      // exporters compute over VisibleSteps()) — not step.index, which
+      // is a stable but frozen capture-time reference (decision #4) that
+      // doesn't move when steps are reordered. A hidden step shows the
+      // position it would take if shown right now, since it isn't
+      // counted in the real (exported) numbering at all.
+      var displayPos = hidden ? (visiblePos + 1) : visiblePos;
 
       var el = document.createElement('div');
-      el.className = 'step' + (isHidden(idx) ? ' hidden-step' : '');
+      el.className = 'step' + (hidden ? ' hidden-step' : '');
 
       var header = document.createElement('div');
       header.className = 'step-header';
-      header.appendChild(buildStepTitle(step));
+      header.appendChild(buildStepTitle(step, displayPos));
 
       var upBtn = mkBtn('↑', pos === 0, function() { moveStep(pos, -1); });
       var downBtn = mkBtn('↓', pos === order.length - 1, function() { moveStep(pos, 1); });
@@ -222,7 +241,7 @@ const editorJS = `
         el.appendChild(row);
 
         if (step.image_file) {
-          el.appendChild(buildImageEditor(step));
+          el.appendChild(buildImageEditor(step, displayPos));
         }
       }
 
@@ -243,11 +262,11 @@ const editorJS = `
   // text input, Enter or blur commits, Escape cancels. Typing the default
   // text back (or clearing it) removes the override rather than storing
   // it literally, so "Step 1" only ever means "no custom title" on disk.
-  function buildStepTitle(step) {
+  function buildStepTitle(step, position) {
     var wrap = document.createElement('div');
     wrap.className = 'step-title';
 
-    function defaultTitle() { return 'Step ' + step.index; }
+    function defaultTitle() { return 'Step ' + position; }
 
     function show() {
       wrap.innerHTML = '';
@@ -319,11 +338,17 @@ const editorJS = `
       appInput.type = 'text';
       appInput.placeholder = 'App';
       appInput.value = step.window_app || '';
+      appInput.className = 'window-app-input';
+      var sep = document.createElement('span');
+      sep.className = 'window-line-sep';
+      sep.textContent = '—';
       var titleInput = document.createElement('input');
       titleInput.type = 'text';
       titleInput.placeholder = 'Window title';
       titleInput.value = step.window_title || '';
+      titleInput.className = 'window-title-input';
       wrap.appendChild(appInput);
+      wrap.appendChild(sep);
       wrap.appendChild(titleInput);
       appInput.focus();
       appInput.select();
@@ -405,7 +430,7 @@ const editorJS = `
   // creates an annotation instead of baking pixels — see decision #18).
   // It registers a stepEditors[step.index] entry so later API responses
   // can update this step's view directly (see the stepEditors comment).
-  function buildImageEditor(step) {
+  function buildImageEditor(step, position) {
     var imgWrap = document.createElement('div');
     imgWrap.className = 'img-wrap';
 
@@ -444,7 +469,7 @@ const editorJS = `
 
     var img = document.createElement('img');
     img.src = imageSrc(step);
-    img.alt = 'Step ' + step.index + ' screenshot';
+    img.alt = 'Step ' + position + ' screenshot';
     imgFrame.appendChild(img);
 
     var overlay = document.createElement('div');

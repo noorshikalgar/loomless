@@ -31,8 +31,9 @@ func Markdown(s *session.Session, dir string) string {
 		return b.String()
 	}
 
-	for _, step := range steps {
-		fmt.Fprintf(&b, "## %s\n\n", stepHeading(step))
+	for i, step := range steps {
+		position := i + 1
+		fmt.Fprintf(&b, "## %s\n\n", stepHeading(step, position))
 
 		if step.Command != "" {
 			fmt.Fprintf(&b, "```bash\n$ %s\n```\n\n", step.Command)
@@ -66,7 +67,7 @@ func Markdown(s *session.Session, dir string) string {
 			if err != nil {
 				imgPath = step.ImageFile // fall back to the unannotated original rather than dropping the image
 			}
-			fmt.Fprintf(&b, "![Step %d](%s)\n\n", step.Index, imgPath)
+			fmt.Fprintf(&b, "![Step %d](%s)\n\n", position, imgPath)
 		}
 	}
 

@@ -52,8 +52,9 @@ func clamp(v, min, max float64) float64 {
 
 // StartRecording creates a session and, best-effort, starts the background
 // click-capture daemon for it. highlightClicks controls whether captured
-// click screenshots get the red-ring annotation (decision #15) — some
-// users/workflows want the raw screenshot instead. A failure to start
+// click screenshots get the red-ring annotation — off by default
+// (decision #21; was on by default per decision #15, but turned out not
+// to be useful in practice), opt-in per recording. A failure to start
 // click-watching (e.g. no Accessibility permission) is not a fatal error
 // — it's returned as warning text so the caller can surface it, while the
 // session itself is still usable via manual capture.
@@ -243,8 +244,8 @@ func ExportSlides(name string) (path string, err error) {
 // process can't also be the short-lived command that started the session.
 func startClickDaemon(name, dir string, highlightClicks bool) error {
 	var extraArgs []string
-	if !highlightClicks {
-		extraArgs = append(extraArgs, "--no-highlight")
+	if highlightClicks {
+		extraArgs = append(extraArgs, "--highlight")
 	}
 	if err := startBackgroundProcess("__click-daemon", name, session.DaemonPIDPath(dir), session.DaemonLogPath(dir), extraArgs...); err != nil {
 		return err

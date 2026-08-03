@@ -47,9 +47,9 @@ func PDF(s *session.Session, dir string) ([]byte, error) {
 		pdf.MultiCell(0, 6, "No steps captured.", "", "L", false)
 	}
 
-	for _, step := range steps {
+	for i, step := range steps {
 		pdf.SetFont("Helvetica", "B", 14)
-		pdf.MultiCell(0, 9, safe(stepHeading(step)), "", "L", false)
+		pdf.MultiCell(0, 9, safe(stepHeading(step, i+1)), "", "L", false)
 
 		if step.Command != "" {
 			renderTerminalStep(pdf, step)
