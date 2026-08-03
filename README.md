@@ -78,7 +78,7 @@ go build -o story ./cmd/story
 ./story step "optional note, no click needed"
 ./story run -- go test ./...     # captures the command + its output as a step
 ./story record stop
-./story edit my-first-story                   # reorder/hide/caption, or drag-redact/highlight a screenshot
+./story edit my-first-story                   # reorder/hide/caption, or draw+adjust redact/highlight boxes (with undo/redo)
 ./story export my-first-story                 # Markdown (default)
 ./story export my-first-story --format pdf    # or a PDF, screenshots embedded
 ./story export my-first-story --format slides # or a self-contained HTML slide deck

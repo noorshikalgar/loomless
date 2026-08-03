@@ -577,6 +577,68 @@ but identical mechanics — click-and-drag a rectangle on a screenshot in
    clear: real unrecoverable pixels, verified by something outside the
    system under test.
 
+## 17. Editor image-editing fixes: real coordinate bug, adjust-before-apply, undo/redo/reset, and a click-highlight refinement
+
+Decided/fixed 2026-08-03, all in response to direct user testing of
+decision #16's redact/highlight feature — real bug reports from someone
+actually using it, not self-identified issues.
+
+**Bug: drag rectangles landed offset from where the user actually
+dragged.** Root cause: the drag overlay's `position: absolute` was
+positioned relative to `.img-wrap` (which also contained the toolbar
+above the image), but the drag coordinates were computed relative to the
+`<img>` element itself — two different origins that disagreed by roughly
+the toolbar's height, so every rectangle rendered shifted up from where
+it was drawn. Fixed by introducing `.img-frame`, a wrapper containing
+*only* the image and its overlay/handles, so both the coordinate
+computation and the overlay's positioning share the same origin by
+construction rather than by a hand-tuned offset. Verified precisely (not
+just "looks right"): dispatched synthetic `MouseEvent`s with exact
+`clientX`/`clientY` values against the real running editor and compared
+the resulting overlay position against the intended one — landed within
+half a pixel (floating-point rounding from `getBoundingClientRect()`),
+for the draw, move (drag the rectangle body), and resize (drag a corner
+handle) interactions all separately. An earlier verification attempt
+mixed two different coordinate spaces (the Browser tool's own screenshot-
+pixel space, which is scaled relative to real CSS pixels, vs. real CSS
+pixels from `getBoundingClientRect()`) and produced a scaled-looking
+false result — worth naming so a future reviewer doesn't mistake that
+methodology error for a real bug in the fix.
+
+**No way to adjust or undo a placed rectangle.** Redesigned the
+interaction from "drag commits immediately" to draw → adjust (move the
+whole rectangle by dragging its body, resize from any of 4 corner
+handles) → explicit Apply/Cancel. Nothing reaches the server until
+Apply. Added `story edit`-scoped Undo/Redo/Reset per step, backed by
+`internal/editor/history.go` — an in-memory (not persisted; lost if the
+editor process exits) stack of previous image bytes, deliberately kept
+out of `session.EditImage`/`Session` itself: undo/redo history is
+ephemeral editing-session state, not part of the durable story the way
+`EditLog` is. Every undo/redo/reset **is** still logged to `EditLog`
+(via a new `session.LogEdit`, reusable for edits whose actual pixel
+mutation happens outside the session package), so the permanent record
+of "this image was touched, and how many times" survives even though the
+byte-level undo buffer doesn't. Verified with a real multi-step sequence
+against the live server: redact, highlight, undo (removes highlight),
+undo again (removes redaction too — confirmed via independent pixel
+read), redo, redo (restores both, in the correct order, confirmed
+pixel-by-pixel each time), reset (reverts to the pre-any-edit original,
+confirmed), and confirmed undo after reset correctly reports "nothing to
+undo" (400) rather than silently no-op'ing.
+
+**Click-highlight refinement:** per the same testing pass, a click that
+itself brings a different app to the front (switching window focus) no
+longer gets the highlight ring — the click is still captured (the window
+switch is real context for a story), but ringing a point that's "wherever
+the background window happened to be" rather than a deliberate target
+was judged more misleading than useful. Implemented by tracking the
+frontmost app as of the previous click in the daemon's closure state,
+seeded from the actual frontmost app at daemon startup (not left empty,
+which would have wrongly flagged the session's very first click as a
+focus change). Logic reviewed, not click-verified end to end — same
+limitation noted for decision #15, synthesizing a real OS-level click
+isn't possible in this environment.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

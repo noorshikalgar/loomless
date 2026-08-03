@@ -374,6 +374,18 @@ func RunClickDaemon(name string, highlightClicks bool, logf func(format string, 
 		capture.StopClickHook()
 	}()
 
+	// lastFrontmostApp tracks which app was frontmost as of the previous
+	// click, so a click that itself brings a different app to the front
+	// (switching windows) can be told apart from a click made within an
+	// app that was already focused. Seeded with whatever's frontmost right
+	// now, not left empty — otherwise the very first click of the session
+	// would look like a "just switched focus" click even when the user
+	// had already been working in that app before recording started.
+	var lastFrontmostApp string
+	if win, ferr := capture.Frontmost(); ferr == nil {
+		lastFrontmostApp = win.App
+	}
+
 	var lastCapture time.Time
 	onClick := func(x, y float64) {
 		now := time.Now()
@@ -387,9 +399,19 @@ func RunClickDaemon(name string, highlightClicks bool, logf func(format string, 
 		var image []byte
 		if err == nil {
 			windowApp, windowTitle = win.App, win.Title
+			// A click that raises a background window to the front is
+			// almost always "switch my attention here," not "interact
+			// with this specific spot" — the coordinates are wherever the
+			// background window happened to be, not a deliberate target.
+			// Ringing that point is more misleading than helpful, so the
+			// screenshot is still captured (the window switch is real
+			// context for the story) but without the highlight marker.
+			focusJustChanged := windowApp != lastFrontmostApp
+			lastFrontmostApp = windowApp
+
 			shot, serr := capture.Screenshot(win) // best-effort; missing Screen Recording permission shouldn't kill the daemon
 			if serr == nil {
-				if highlightClicks {
+				if highlightClicks && !focusJustChanged {
 					// Window may have moved/resized between the click and
 					// this Frontmost() lookup; clamp so the marker stays
 					// on-image instead of drawing off the edge.

@@ -39,15 +39,22 @@ const editorCSS = `
   img { max-width: 100%; border-radius: 4px; display: block; }
   pre { background: #17171a; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; margin: 0.4rem 0; }
   pre.cmd { color: #7ee787; }
-  .img-wrap { position: relative; margin-top: 0.5rem; }
-  .img-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+  .img-wrap { margin-top: 0.5rem; }
+  .img-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
   .img-toolbar button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; }
+  .img-toolbar button:disabled { opacity: 0.35; cursor: default; }
   .img-toolbar button.armed.redact-btn { background: #7a2a2a; border-color: #a03c3c; }
   .img-toolbar button.armed.highlight-btn { background: #7a5a1a; border-color: #a07c2c; }
+  .img-toolbar button.apply-btn { background: #2a5a3a; border-color: #3a7a4a; }
+  .img-toolbar .sep { width: 1px; height: 1.2rem; background: #444; margin: 0 0.2rem; }
   .mode-hint { color: #999; font-size: 0.8rem; }
-  .drag-overlay { position: absolute; display: none; pointer-events: none; border: 2px dashed #fff; box-sizing: border-box; }
+  .img-frame { position: relative; }
+  .drag-overlay { position: absolute; display: none; pointer-events: auto; border: 2px dashed #fff; box-sizing: border-box; cursor: move; }
   .drag-overlay.redact { border-color: #ff5a5a; background: rgba(255, 0, 0, 0.15); }
   .drag-overlay.highlight { border-color: #ffb020; background: rgba(255, 176, 32, 0.15); }
+  .resize-handle { position: absolute; width: 10px; height: 10px; margin: -5px; background: #fff; border: 1px solid #333; border-radius: 2px; z-index: 2; }
+  .handle-nw, .handle-se { cursor: nwse-resize; }
+  .handle-ne, .handle-sw { cursor: nesw-resize; }
 `
 
 const editorJS = `
@@ -154,35 +161,7 @@ const editorJS = `
         el.appendChild(row);
 
         if (step.image_file) {
-          var imgWrap = document.createElement('div');
-          imgWrap.className = 'img-wrap';
-
-          var toolbar = document.createElement('div');
-          toolbar.className = 'img-toolbar';
-          var redactBtn = document.createElement('button');
-          redactBtn.className = 'redact-btn';
-          redactBtn.textContent = 'Draw Redaction';
-          var highlightBtn = document.createElement('button');
-          highlightBtn.className = 'highlight-btn';
-          highlightBtn.textContent = 'Draw Highlight';
-          var modeHint = document.createElement('span');
-          modeHint.className = 'mode-hint';
-          toolbar.appendChild(redactBtn);
-          toolbar.appendChild(highlightBtn);
-          toolbar.appendChild(modeHint);
-          imgWrap.appendChild(toolbar);
-
-          var img = document.createElement('img');
-          img.src = '/images/' + step.image_file.split('/').pop();
-          img.alt = 'Step ' + step.index + ' screenshot';
-          imgWrap.appendChild(img);
-
-          var overlay = document.createElement('div');
-          overlay.className = 'drag-overlay';
-          imgWrap.appendChild(overlay);
-
-          el.appendChild(imgWrap);
-          setupImageEditing(img, overlay, redactBtn, highlightBtn, modeHint, step.index);
+          el.appendChild(buildImageEditor(step));
         }
       }
 
@@ -215,81 +194,262 @@ const editorJS = `
     api('POST', '/api/hide', {index: idx, hidden: !isHidden(idx)}).then(load);
   }
 
-  // setupImageEditing wires one step's screenshot up for click-and-drag
-  // redaction/highlighting. "Armed" mode: clicking Redact or Highlight
-  // arms that mode (crosshair cursor, button visually marked active);
-  // the next drag on the image performs it and disarms automatically —
-  // deliberately single-shot per click rather than a persistent toggle,
-  // so it's always unambiguous which mode (if any) is currently armed
-  // when there are several steps' images on the page at once.
-  function setupImageEditing(img, overlay, redactBtn, highlightBtn, modeHint, stepIndex) {
+  // buildImageEditor builds one step's screenshot + editing toolbar:
+  // Draw Redaction / Draw Highlight (arm a mode, drag to sketch a
+  // rectangle), then adjust it (drag the body to move, drag a corner
+  // handle to resize) before committing with Apply — nothing is sent to
+  // the server until Apply, so a misplaced drag doesn't need to be
+  // corrected after the fact. Undo/Redo/Reset operate on the server's
+  // per-step version history (internal/editor/history.go), which is kept
+  // for the life of this "story edit" process only.
+  function buildImageEditor(step) {
+    var imgWrap = document.createElement('div');
+    imgWrap.className = 'img-wrap';
+
+    var toolbar = document.createElement('div');
+    toolbar.className = 'img-toolbar';
+    var redactBtn = mkPlainBtn('Draw Redaction', 'redact-btn');
+    var highlightBtn = mkPlainBtn('Draw Highlight', 'highlight-btn');
+    var sep1 = document.createElement('span');
+    sep1.className = 'sep';
+    var applyBtn = mkPlainBtn('Apply', 'apply-btn');
+    var cancelBtn = mkPlainBtn('Cancel');
+    var sep2 = document.createElement('span');
+    sep2.className = 'sep';
+    var undoBtn = mkPlainBtn('Undo');
+    var redoBtn = mkPlainBtn('Redo');
+    var resetBtn = mkPlainBtn('Reset');
+    var modeHint = document.createElement('span');
+    modeHint.className = 'mode-hint';
+    [redactBtn, highlightBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
+      .forEach(function(elm) { toolbar.appendChild(elm); });
+    imgWrap.appendChild(toolbar);
+
+    var imgFrame = document.createElement('div');
+    imgFrame.className = 'img-frame';
+
+    var img = document.createElement('img');
+    img.src = '/images/' + step.image_file.split('/').pop();
+    img.alt = 'Step ' + step.index + ' screenshot';
+    imgFrame.appendChild(img);
+
+    var overlay = document.createElement('div');
+    overlay.className = 'drag-overlay';
+    imgFrame.appendChild(overlay);
+
+    var handles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
+      var h = document.createElement('div');
+      h.className = 'resize-handle handle-' + corner;
+      h.style.display = 'none';
+      imgFrame.appendChild(h);
+      return {corner: corner, el: h};
+    });
+
+    imgWrap.appendChild(imgFrame);
+
+    setupImageEditing({
+      img: img, imgFrame: imgFrame, overlay: overlay, handles: handles,
+      redactBtn: redactBtn, highlightBtn: highlightBtn,
+      applyBtn: applyBtn, cancelBtn: cancelBtn,
+      undoBtn: undoBtn, redoBtn: redoBtn, resetBtn: resetBtn,
+      modeHint: modeHint, stepIndex: step.index,
+    });
+
+    return imgWrap;
+  }
+
+  function mkPlainBtn(label, cls) {
+    var b = document.createElement('button');
+    b.textContent = label;
+    if (cls) b.className = cls;
+    return b;
+  }
+
+  // setupImageEditing wires up one step's screenshot for the draw ->
+  // adjust -> Apply/Cancel flow, plus Undo/Redo/Reset. All coordinates
+  // are tracked relative to imgFrame — the element that directly and
+  // only wraps the <img> and its overlay/handles, so a pixel measured
+  // relative to imgFrame's top-left lands in exactly the same spot
+  // whether you're computing where the mouse is or where to draw the
+  // overlay. (An earlier version measured the mouse relative to the
+  // <img> itself but positioned the overlay relative to a wrapper that
+  // also contained the toolbar above it — the two disagreed by roughly
+  // the toolbar's height, so every rectangle appeared shifted up from
+  // where it was actually dragged. Giving the frame nothing but the
+  // image and its overlay fixes that by construction, not by hand-tuning
+  // an offset.)
+  function setupImageEditing(el) {
     var armedMode = null;
-    var dragStart = null;
+    var pending = null; // {mode, x, y, w, h} in on-screen px, relative to imgFrame
+    var dragging = null;
 
     function setArmed(mode) {
       armedMode = mode;
-      img.style.cursor = mode ? 'crosshair' : 'default';
-      modeHint.textContent = mode ? ('Drag on the image to draw a ' + mode + '.') : '';
-      redactBtn.classList.toggle('armed', mode === 'redact');
-      highlightBtn.classList.toggle('armed', mode === 'highlight');
+      el.img.style.cursor = mode ? 'crosshair' : 'default';
+      el.modeHint.textContent = mode ? ('Drag on the image to draw a ' + mode + '.') : '';
+      el.redactBtn.classList.toggle('armed', mode === 'redact');
+      el.highlightBtn.classList.toggle('armed', mode === 'highlight');
     }
 
-    redactBtn.addEventListener('click', function() { setArmed(armedMode === 'redact' ? null : 'redact'); });
-    highlightBtn.addEventListener('click', function() { setArmed(armedMode === 'highlight' ? null : 'highlight'); });
+    function updateButtonStates() {
+      el.redactBtn.disabled = !!pending;
+      el.highlightBtn.disabled = !!pending;
+    }
 
-    function pos(e) {
-      var rect = img.getBoundingClientRect();
+    function framePos(e) {
+      var rect = el.imgFrame.getBoundingClientRect();
       return {x: e.clientX - rect.left, y: e.clientY - rect.top};
     }
 
-    function updateOverlay(a, b) {
-      overlay.style.left = Math.min(a.x, b.x) + 'px';
-      overlay.style.top = Math.min(a.y, b.y) + 'px';
-      overlay.style.width = Math.abs(a.x - b.x) + 'px';
-      overlay.style.height = Math.abs(a.y - b.y) + 'px';
+    function renderOverlay() {
+      if (!pending) {
+        el.overlay.style.display = 'none';
+        el.handles.forEach(function(h) { h.el.style.display = 'none'; });
+        return;
+      }
+      el.overlay.className = 'drag-overlay ' + pending.mode;
+      el.overlay.style.display = 'block';
+      el.overlay.style.left = pending.x + 'px';
+      el.overlay.style.top = pending.y + 'px';
+      el.overlay.style.width = pending.w + 'px';
+      el.overlay.style.height = pending.h + 'px';
+      el.handles.forEach(function(h) {
+        h.el.style.display = 'block';
+        h.el.style.left = (h.corner.indexOf('w') !== -1 ? pending.x : pending.x + pending.w) + 'px';
+        h.el.style.top = (h.corner.indexOf('n') !== -1 ? pending.y : pending.y + pending.h) + 'px';
+      });
     }
 
-    img.addEventListener('mousedown', function(e) {
-      if (!armedMode) return;
+    function showApplyBar(show) {
+      el.applyBtn.style.display = show ? 'inline-block' : 'none';
+      el.cancelBtn.style.display = show ? 'inline-block' : 'none';
+    }
+    showApplyBar(false);
+
+    el.redactBtn.addEventListener('click', function() {
+      if (pending) return;
+      setArmed(armedMode === 'redact' ? null : 'redact');
+    });
+    el.highlightBtn.addEventListener('click', function() {
+      if (pending) return;
+      setArmed(armedMode === 'highlight' ? null : 'highlight');
+    });
+
+    el.img.addEventListener('mousedown', function(e) {
+      if (!armedMode || pending) return;
       e.preventDefault();
-      dragStart = pos(e);
-      overlay.className = 'drag-overlay ' + armedMode;
-      overlay.style.display = 'block';
-      updateOverlay(dragStart, dragStart);
+      var p = framePos(e);
+      dragging = {type: 'draw', startX: p.x, startY: p.y};
+      pending = {mode: armedMode, x: p.x, y: p.y, w: 0, h: 0};
+      renderOverlay();
+    });
+
+    el.overlay.addEventListener('mousedown', function(e) {
+      if (!pending) return;
+      e.preventDefault();
+      var p = framePos(e);
+      dragging = {type: 'move', startX: p.x, startY: p.y, orig: {x: pending.x, y: pending.y, w: pending.w, h: pending.h}};
+    });
+
+    el.handles.forEach(function(h) {
+      h.el.addEventListener('mousedown', function(e) {
+        if (!pending) return;
+        e.preventDefault();
+        e.stopPropagation(); // don't also trigger the overlay's move-drag
+        dragging = {type: 'resize', corner: h.corner, orig: {x: pending.x, y: pending.y, w: pending.w, h: pending.h}};
+      });
     });
 
     window.addEventListener('mousemove', function(e) {
-      if (!dragStart) return;
-      updateOverlay(dragStart, pos(e));
+      if (!dragging || !pending) return;
+      var p = framePos(e);
+      if (dragging.type === 'draw') {
+        pending.x = Math.min(dragging.startX, p.x);
+        pending.y = Math.min(dragging.startY, p.y);
+        pending.w = Math.abs(p.x - dragging.startX);
+        pending.h = Math.abs(p.y - dragging.startY);
+      } else if (dragging.type === 'move') {
+        pending.x = dragging.orig.x + (p.x - dragging.startX);
+        pending.y = dragging.orig.y + (p.y - dragging.startY);
+      } else if (dragging.type === 'resize') {
+        var o = dragging.orig;
+        var left = o.x, top = o.y, right = o.x + o.w, bottom = o.y + o.h;
+        if (dragging.corner.indexOf('n') !== -1) top = p.y;
+        if (dragging.corner.indexOf('s') !== -1) bottom = p.y;
+        if (dragging.corner.indexOf('w') !== -1) left = p.x;
+        if (dragging.corner.indexOf('e') !== -1) right = p.x;
+        pending.x = Math.min(left, right);
+        pending.y = Math.min(top, bottom);
+        pending.w = Math.abs(right - left);
+        pending.h = Math.abs(bottom - top);
+      }
+      renderOverlay();
     });
 
-    window.addEventListener('mouseup', function(e) {
-      if (!dragStart) return;
-      var cur = pos(e);
-      var x0 = Math.min(dragStart.x, cur.x), y0 = Math.min(dragStart.y, cur.y);
-      var w = Math.abs(dragStart.x - cur.x), h = Math.abs(dragStart.y - cur.y);
-      var mode = armedMode;
-      dragStart = null;
-      overlay.style.display = 'none';
-      setArmed(null);
+    window.addEventListener('mouseup', function() {
+      if (!dragging) return;
+      var wasTinyDraw = dragging.type === 'draw' && pending && (pending.w < 4 || pending.h < 4);
+      dragging = null;
+      if (wasTinyDraw) {
+        // Too small to be an intentional rectangle -- a stray click while
+        // armed, not a shape to adjust.
+        pending = null;
+        setArmed(null);
+        renderOverlay();
+        showApplyBar(false);
+        updateButtonStates();
+        return;
+      }
+      if (pending) {
+        showApplyBar(true);
+        updateButtonStates();
+      }
+    });
 
-      if (w < 4 || h < 4) return; // ignore accidental clicks/tiny drags
+    function refreshImage() {
+      var base = el.img.src.split('?')[0];
+      el.img.src = base + '?t=' + Date.now();
+    }
 
-      // The <img> is often displayed smaller than its natural size (CSS
-      // max-width: 100%); convert the drag's on-screen coordinates to the
-      // image's real pixel coordinates, which is what the API/PNG edit
-      // operates in.
-      var scaleX = img.naturalWidth / img.clientWidth;
-      var scaleY = img.naturalHeight / img.clientHeight;
-      api('POST', '/api/edit-image', {
-        index: stepIndex, action: mode,
-        x: x0 * scaleX, y: y0 * scaleY, w: w * scaleX, h: h * scaleY,
-      }).then(function() {
-        // Same filename, new bytes — force a real re-fetch instead of
-        // whatever the browser has cached.
-        var base = img.src.split('?')[0];
-        img.src = base + '?t=' + Date.now();
+    el.applyBtn.addEventListener('click', function() {
+      if (!pending) return;
+      var scaleX = el.img.naturalWidth / el.img.clientWidth;
+      var scaleY = el.img.naturalHeight / el.img.clientHeight;
+      var payload = {
+        index: el.stepIndex, action: pending.mode,
+        x: pending.x * scaleX, y: pending.y * scaleY,
+        w: pending.w * scaleX, h: pending.h * scaleY,
+      };
+      api('POST', '/api/edit-image', payload).then(function() {
+        pending = null;
+        setArmed(null);
+        renderOverlay();
+        showApplyBar(false);
+        updateButtonStates();
+        refreshImage();
       }).catch(function(e) { alert('Edit failed: ' + e.message); });
+    });
+
+    el.cancelBtn.addEventListener('click', function() {
+      pending = null;
+      setArmed(null);
+      renderOverlay();
+      showApplyBar(false);
+      updateButtonStates();
+    });
+
+    el.undoBtn.addEventListener('click', function() {
+      api('POST', '/api/image-undo', {index: el.stepIndex}).then(refreshImage)
+        .catch(function(e) { alert(e.message || 'Nothing to undo.'); });
+    });
+    el.redoBtn.addEventListener('click', function() {
+      api('POST', '/api/image-redo', {index: el.stepIndex}).then(refreshImage)
+        .catch(function(e) { alert(e.message || 'Nothing to redo.'); });
+    });
+    el.resetBtn.addEventListener('click', function() {
+      if (!confirm('Discard all edits made to this screenshot in this editing session?')) return;
+      api('POST', '/api/image-reset', {index: el.stepIndex}).then(refreshImage)
+        .catch(function(e) { alert(e.message || 'Nothing to reset.'); });
     });
   }
 

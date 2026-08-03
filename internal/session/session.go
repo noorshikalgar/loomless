@@ -603,3 +603,20 @@ func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*
 	}
 	return s, nil
 }
+
+// LogEdit reloads the named session, appends an already-built EditEntry
+// (its Timestamp is set here, overwriting whatever the caller passed), and
+// saves. For edits whose actual mutation happens outside this package —
+// image undo/redo/reset (internal/editor's in-memory version history)
+// still needs a permanent, on-disk record that something happened, the
+// same as every other edit in EditLog, even though the pixel-level work
+// isn't session package's to do for those three operations.
+func LogEdit(name string, entry EditEntry) error {
+	s, dir, err := Load(name)
+	if err != nil {
+		return err
+	}
+	entry.Timestamp = time.Now()
+	s.EditLog = append(s.EditLog, entry)
+	return save(dir, s)
+}

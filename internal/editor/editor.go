@@ -47,6 +47,33 @@ func NewHandler(name string) (http.Handler, error) {
 		return nil, fmt.Errorf("session %q not found: %w", name, err)
 	}
 
+	history := newImageHistory()
+
+	// stepImage resolves a step's screenshot path and current bytes —
+	// shared by /api/edit-image (needs the "before" bytes to push onto
+	// history) and the undo/redo/reset endpoints (need the current bytes
+	// to push the other direction).
+	stepImage := func(stepIndex int) (path string, current []byte, err error) {
+		s, _, err := session.Load(name)
+		if err != nil {
+			return "", nil, err
+		}
+		for _, step := range s.Steps {
+			if step.Index == stepIndex {
+				if step.ImageFile == "" {
+					return "", nil, fmt.Errorf("step %d has no screenshot", stepIndex)
+				}
+				p := filepath.Join(dir, step.ImageFile)
+				data, err := os.ReadFile(p)
+				if err != nil {
+					return "", nil, err
+				}
+				return p, data, nil
+			}
+		}
+		return "", nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -126,12 +153,72 @@ func NewHandler(name string) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		_, before, err := stepImage(body.Index)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if _, err := session.EditImage(name, body.Index, body.Action, body.X, body.Y, body.W, body.H); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Only recorded once the edit actually succeeded — a failed edit
+		// shouldn't leave a phantom "before" state with no matching
+		// "after" on the undo stack.
+		history.push(body.Index, before)
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/image-undo", func(w http.ResponseWriter, r *http.Request) {
+		handleHistoryOp(w, r, name, history.undoStep, stepImage, "image_undo")
+	})
+	mux.HandleFunc("POST /api/image-redo", func(w http.ResponseWriter, r *http.Request) {
+		handleHistoryOp(w, r, name, history.redoStep, stepImage, "image_redo")
+	})
+	mux.HandleFunc("POST /api/image-reset", func(w http.ResponseWriter, r *http.Request) {
+		handleHistoryOp(w, r, name, func(idx int, _ []byte) ([]byte, bool) {
+			return history.resetStep(idx)
+		}, stepImage, "image_reset")
 	})
 
 	return mux, nil
+}
+
+// handleHistoryOp is shared by the undo/redo/reset endpoints: decode the
+// step index, look up the current bytes, ask the history store for the
+// replacement version, write it to disk if there is one, and log the
+// action. op is history.undoStep/redoStep, or a reset adapter with the
+// same shape (reset doesn't need "current," but takes it for a uniform
+// signature).
+func handleHistoryOp(
+	w http.ResponseWriter, r *http.Request, name string,
+	op func(stepIndex int, current []byte) ([]byte, bool),
+	stepImage func(stepIndex int) (path string, current []byte, err error),
+	logAction string,
+) {
+	var body struct {
+		Index int `json:"index"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	path, current, err := stepImage(body.Index)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	replacement, ok := op(body.Index, current)
+	if !ok {
+		http.Error(w, "nothing to undo/redo/reset for this step", http.StatusBadRequest)
+		return
+	}
+	if err := os.WriteFile(path, replacement, 0o644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := session.LogEdit(name, session.EditEntry{Action: logAction, StepIndex: body.Index}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
