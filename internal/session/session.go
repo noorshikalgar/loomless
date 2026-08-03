@@ -568,19 +568,23 @@ func EditNote(name string, stepIndex int, newNote string) (*Session, error) {
 	return s, nil
 }
 
-// EditImage reloads the named session and permanently redacts (solid
-// black fill — the content must be genuinely unrecoverable, not just
-// hidden) or highlights (colored outline) a rectangular region of a
-// step's screenshot, given in the image's own pixel coordinates. This is
+// EditImage reloads the named session and permanently redacts a
+// rectangular region of a step's screenshot, given in the image's own
+// pixel coordinates, using the given style (capture.RedactStyleSolid or
+// capture.RedactStyleBlur — an empty style defaults to solid). This is
 // the one deliberate exception to "capture-time data is never mutated"
 // (decision #4): redaction only works if the original pixels are actually
-// gone, so the image file itself is overwritten in place — but the edit
-// is still logged (what happened and where, never the covered content
-// itself, which was never retained anywhere to leak) per
+// gone (or, for blur, thoroughly obscured), so the image file itself is
+// overwritten in place — but the edit is still logged (what happened,
+// where, and which style, never the covered content itself, which was
+// never retained anywhere to leak) per
 // docs/product/06-editing-and-versioning.md's redaction carve-out.
-func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*Session, error) {
-	if action != "redact" {
-		return nil, fmt.Errorf("unknown image edit action %q (want redact)", action)
+func EditImage(name string, stepIndex int, style string, x, y, w, h float64) (*Session, error) {
+	if style == "" {
+		style = capture.RedactStyleSolid
+	}
+	if style != capture.RedactStyleSolid && style != capture.RedactStyleBlur {
+		return nil, fmt.Errorf("unknown redact style %q (want %q or %q)", style, capture.RedactStyleSolid, capture.RedactStyleBlur)
 	}
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("rectangle must have positive width and height")
@@ -604,7 +608,7 @@ func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*
 		return nil, fmt.Errorf("read image: %w", err)
 	}
 
-	edited, err := capture.Redact(data, x, y, w, h)
+	edited, err := capture.Redact(data, x, y, w, h, style)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +618,7 @@ func EditImage(name string, stepIndex int, action string, x, y, w, h float64) (*
 
 	s.EditLog = append(s.EditLog, EditEntry{
 		Timestamp: time.Now(), Action: "image_redact", StepIndex: stepIndex,
-		NewValue: fmt.Sprintf("rect(%.0f,%.0f,%.0f,%.0f)", x, y, w, h),
+		NewValue: fmt.Sprintf("%s rect(%.0f,%.0f,%.0f,%.0f)", style, x, y, w, h),
 	})
 	if err := save(dir, s); err != nil {
 		return nil, err
@@ -639,15 +643,18 @@ func findStep(s *Session, stepIndex int) (*Step, error) {
 // number on that step — freely renumbered afterward via
 // UpdateAnnotation), logs the change, and saves. Used by both the click
 // daemon's automatic ring and the editor's manually-drawn highlights —
-// see decision #18.
-func AddAnnotation(name string, stepIndex int, x, y, w, h float64) (*Session, error) {
+// see decision #18. Returns the created Annotation directly (not just
+// buried in the returned Session) so a caller like the editor's API can
+// hand it straight back to the client without making the client guess
+// which entry in the step's list is the new one.
+func AddAnnotation(name string, stepIndex int, x, y, w, h float64) (Annotation, *Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
-		return nil, err
+		return Annotation{}, nil, err
 	}
 	target, err := findStep(s, stepIndex)
 	if err != nil {
-		return nil, err
+		return Annotation{}, nil, err
 	}
 
 	nextID, nextNumber := 1, 1
@@ -659,11 +666,84 @@ func AddAnnotation(name string, stepIndex int, x, y, w, h float64) (*Session, er
 			nextNumber = a.Number + 1
 		}
 	}
-	target.Annotations = append(target.Annotations, Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h})
+	created := Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h}
+	target.Annotations = append(target.Annotations, created)
 
 	s.EditLog = append(s.EditLog, EditEntry{
 		Timestamp: time.Now(), Action: "add_annotation", StepIndex: stepIndex,
 		NewValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", nextNumber, x, y, w, h),
+	})
+	if err := save(dir, s); err != nil {
+		return Annotation{}, nil, err
+	}
+	return created, s, nil
+}
+
+// SetAnnotations reloads the named session and replaces a step's entire
+// annotation list wholesale. Low-level and deliberately unlogged itself
+// (unlike every other function in this file) — it's the primitive the
+// editor's unified undo/redo/reset (internal/editor/history.go) uses to
+// restore a prior snapshot atomically; the caller is responsible for
+// logging the semantic action ("undo"/"redo"/"reset" — see LogEdit),
+// the same way image undo/redo/reset already do for pixel restores.
+func SetAnnotations(name string, stepIndex int, anns []Annotation) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
+	}
+	target.Annotations = anns
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// ReorderAnnotations reloads the named session and reorders a step's
+// annotation list. List order doubles as paint/stacking order — later in
+// the list renders on top, in both the editor and every exporter — so
+// this is also how "bring to front"/"send to back" work, not a separate
+// z-index field to keep in sync. newOrder must be a permutation of the
+// step's existing annotation IDs; partial or garbage input is rejected
+// rather than silently dropping an annotation from the stack.
+func ReorderAnnotations(name string, stepIndex int, newOrder []int) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[int]Annotation, len(target.Annotations))
+	for _, a := range target.Annotations {
+		byID[a.ID] = a
+	}
+	if len(newOrder) != len(byID) {
+		return nil, fmt.Errorf("reorder must include exactly the step's %d annotation(s), got %d", len(byID), len(newOrder))
+	}
+	seen := make(map[int]bool, len(newOrder))
+	reordered := make([]Annotation, 0, len(newOrder))
+	for _, id := range newOrder {
+		a, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("annotation %d does not exist on step %d", id, stepIndex)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("annotation %d listed more than once", id)
+		}
+		seen[id] = true
+		reordered = append(reordered, a)
+	}
+	target.Annotations = reordered
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "reorder_annotations", StepIndex: stepIndex,
+		NewValue: fmt.Sprint(newOrder),
 	})
 	if err := save(dir, s); err != nil {
 		return nil, err

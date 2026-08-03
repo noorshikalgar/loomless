@@ -83,13 +83,26 @@ func RenderAnnotations(pngData []byte, annotations []Annotation) ([]byte, error)
 	return out.Bytes(), nil
 }
 
-// Redact permanently fills a rectangular region with solid black, given in
-// the image's own pixel coordinates. Unlike annotations, this mutates the
-// image on disk (via session.EditImage) — solid fill, not blur, because
-// per docs/product/06-editing-and-versioning.md's redaction carve-out the
-// covered content must actually be unrecoverable, not just visually
-// obscured.
-func Redact(pngData []byte, x, y, w, h float64) ([]byte, error) {
+// RedactStyleSolid fills the region with opaque black — genuinely
+// unrecoverable, per docs/product/06-editing-and-versioning.md's redaction
+// carve-out. This is the default and the only style that should be used for
+// actual secrets (API keys, tokens, credentials).
+const RedactStyleSolid = "solid"
+
+// RedactStyleBlur obscures the region with a strong box blur instead of
+// deleting it — content stays roughly shape/color-visible but individual
+// details (text, faces) become illegible. This is NOT cryptographically
+// irreversible the way solid fill is; it exists for cases where the user
+// wants to obscure something (a face in a demo, a distracting background
+// element) without needing pixel-level guarantees. Never used for the
+// masking pipeline's automatic secret redaction — only for user-initiated
+// manual redaction in the editor.
+const RedactStyleBlur = "blur"
+
+// Redact permanently mutates a rectangular region of the image, given in
+// the image's own pixel coordinates, per the given style (solid or blur —
+// see RedactStyleSolid/RedactStyleBlur). An empty style defaults to solid.
+func Redact(pngData []byte, x, y, w, h float64, style string) ([]byte, error) {
 	img, err := png.Decode(bytes.NewReader(pngData))
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
@@ -98,7 +111,12 @@ func Redact(pngData []byte, x, y, w, h float64) ([]byte, error) {
 	rgba := image.NewRGBA(bounds)
 	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
 
-	fillRectSolid(rgba, x, y, x+w, y+h, color.RGBA{R: 0, G: 0, B: 0, A: 255})
+	switch style {
+	case RedactStyleBlur:
+		blurRect(rgba, x, y, x+w, y+h)
+	default:
+		fillRectSolid(rgba, x, y, x+w, y+h, color.RGBA{R: 0, G: 0, B: 0, A: 255})
+	}
 
 	var out bytes.Buffer
 	if err := png.Encode(&out, rgba); err != nil {
@@ -125,6 +143,86 @@ func fillRectSolid(img *image.RGBA, minXf, minYf, maxXf, maxYf float64, c color.
 			img.Set(x, y, c)
 		}
 	}
+}
+
+// blurRect obscures [minXf,maxXf) x [minYf,maxYf) in place with a strong
+// box blur. Three passes of box blur closely approximate a Gaussian blur
+// (a well-known equivalence) while staying simple — no separate kernel
+// math, just repeated axis-aligned averaging over a scratch buffer.
+func blurRect(img *image.RGBA, minXf, minYf, maxXf, maxYf float64) {
+	const radius = 8
+	const passes = 3
+
+	minX, minY := int(math.Round(minXf)), int(math.Round(minYf))
+	maxX, maxY := int(math.Round(maxXf)), int(math.Round(maxYf))
+	b := img.Bounds()
+	if minX < b.Min.X {
+		minX = b.Min.X
+	}
+	if minY < b.Min.Y {
+		minY = b.Min.Y
+	}
+	if maxX > b.Max.X {
+		maxX = b.Max.X
+	}
+	if maxY > b.Max.Y {
+		maxY = b.Max.Y
+	}
+	w, h := maxX-minX, maxY-minY
+	if w <= 0 || h <= 0 {
+		return
+	}
+
+	region := make([]color.RGBA, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			region[y*w+x] = img.RGBAAt(minX+x, minY+y)
+		}
+	}
+
+	tmp := make([]color.RGBA, w*h)
+	for pass := 0; pass < passes; pass++ {
+		// Horizontal pass: region -> tmp.
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				tmp[y*w+x] = averageRun(region, w, h, x, y, radius, 1, 0)
+			}
+		}
+		// Vertical pass: tmp -> region.
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				region[y*w+x] = averageRun(tmp, w, h, x, y, radius, 0, 1)
+			}
+		}
+	}
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetRGBA(minX+x, minY+y, region[y*w+x])
+		}
+	}
+}
+
+// averageRun averages the pixels within radius of (x,y) along direction
+// (dx,dy) — (1,0) for a horizontal run, (0,1) for a vertical run.
+func averageRun(src []color.RGBA, w, h, x, y, radius, dx, dy int) color.RGBA {
+	var rSum, gSum, bSum, aSum, n uint32
+	for i := -radius; i <= radius; i++ {
+		xx, yy := x+i*dx, y+i*dy
+		if xx < 0 || xx >= w || yy < 0 || yy >= h {
+			continue
+		}
+		c := src[yy*w+xx]
+		rSum += uint32(c.R)
+		gSum += uint32(c.G)
+		bSum += uint32(c.B)
+		aSum += uint32(c.A)
+		n++
+	}
+	if n == 0 {
+		return color.RGBA{}
+	}
+	return color.RGBA{R: uint8(rSum / n), G: uint8(gSum / n), B: uint8(bSum / n), A: uint8(aSum / n)}
 }
 
 // drawRectBorder draws only the border (thickness px) of

@@ -1,44 +1,74 @@
 package editor
 
-import "sync"
+import (
+	"sync"
 
-// imageHistory is an in-memory undo/redo stack of a step's screenshot
-// bytes, scoped to one running "story edit" process — not persisted.
-// Deliberately ephemeral: the permanent, durable record of what changed
-// is Session.EditLog (every image_redact/image_highlight/image_undo/
-// image_redo/image_reset entry, logged via session.LogEdit as each of
-// these operations runs), which survives the editor closing; this is
-// just enough state to make "oops, undo that" work while the editor is
-// open, without keeping every past version of every screenshot around
-// forever on disk.
-type imageHistory struct {
-	mu   sync.Mutex
-	undo map[int][][]byte
-	redo map[int][][]byte
+	"github.com/noorshikalgar/story/internal/session"
+)
+
+// editSnapshot captures a step's full editable surface — image bytes and
+// annotation list together — as one unit. Redaction and annotation edits
+// used to have two disconnected undo mechanisms (image-only undo/redo,
+// and no history at all for annotations); snapshotting both together
+// means a single Undo/Redo/Reset walks the true chronological order of
+// everything the user did to a step, regardless of which kind of edit it
+// was.
+type editSnapshot struct {
+	Image       []byte
+	Annotations []session.Annotation
 }
 
-func newImageHistory() *imageHistory {
-	return &imageHistory{undo: map[int][][]byte{}, redo: map[int][][]byte{}}
+// cloneAnnotations copies the slice (session.Annotation has no reference
+// fields, so a shallow element copy is a full copy) so a snapshot can't be
+// mutated by later in-place edits to the live step's slice.
+func cloneAnnotations(anns []session.Annotation) []session.Annotation {
+	return append([]session.Annotation(nil), anns...)
 }
 
-// push records the image bytes as they were immediately before an edit
-// that's about to be applied, and clears any redo history for that step
-// — a fresh edit invalidates whatever had been undone.
-func (h *imageHistory) push(stepIndex int, before []byte) {
+// editHistory is in-memory, per-step undo/redo/reset state scoped to one
+// running "story edit" process — not persisted. This is deliberately
+// ephemeral (decision #17): the durable record of what changed is
+// Session.EditLog, written to by every mutating session function
+// regardless of history state; editHistory just makes "oops, undo that"
+// pleasant while the editor is open.
+type editHistory struct {
+	mu       sync.Mutex
+	baseline map[int]editSnapshot
+	undo     map[int][]editSnapshot
+	redo     map[int][]editSnapshot
+}
+
+func newEditHistory() *editHistory {
+	return &editHistory{
+		baseline: make(map[int]editSnapshot),
+		undo:     make(map[int][]editSnapshot),
+		redo:     make(map[int][]editSnapshot),
+	}
+}
+
+// push records the state immediately before a mutation that's about to be
+// applied. The first push seen for a step also seeds the Reset baseline.
+// A fresh edit always clears redo history for that step, same as any
+// other undo/redo system — once you make a new change, "redo" no longer
+// has a coherent future to jump to.
+func (h *editHistory) push(stepIndex int, before editSnapshot) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if _, ok := h.baseline[stepIndex]; !ok {
+		h.baseline[stepIndex] = before
+	}
 	h.undo[stepIndex] = append(h.undo[stepIndex], before)
-	h.redo[stepIndex] = nil
+	delete(h.redo, stepIndex)
 }
 
-// undo returns the previous version and true if one exists, moving
-// `current` onto the redo stack in the process.
-func (h *imageHistory) undoStep(stepIndex int, current []byte) ([]byte, bool) {
+// undoStep pops the most recent pre-edit snapshot and returns it, pushing
+// `current` onto the redo stack so a subsequent Redo can restore it.
+func (h *editHistory) undoStep(stepIndex int, current editSnapshot) (editSnapshot, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	stack := h.undo[stepIndex]
 	if len(stack) == 0 {
-		return nil, false
+		return editSnapshot{}, false
 	}
 	prev := stack[len(stack)-1]
 	h.undo[stepIndex] = stack[:len(stack)-1]
@@ -46,14 +76,14 @@ func (h *imageHistory) undoStep(stepIndex int, current []byte) ([]byte, bool) {
 	return prev, true
 }
 
-// redo returns the next undone version and true if one exists, moving
+// redoStep pops the most recently undone snapshot and returns it, pushing
 // `current` back onto the undo stack.
-func (h *imageHistory) redoStep(stepIndex int, current []byte) ([]byte, bool) {
+func (h *editHistory) redoStep(stepIndex int, current editSnapshot) (editSnapshot, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	stack := h.redo[stepIndex]
 	if len(stack) == 0 {
-		return nil, false
+		return editSnapshot{}, false
 	}
 	next := stack[len(stack)-1]
 	h.redo[stepIndex] = stack[:len(stack)-1]
@@ -61,18 +91,18 @@ func (h *imageHistory) redoStep(stepIndex int, current []byte) ([]byte, bool) {
 	return next, true
 }
 
-// reset returns the earliest recorded version (the state before any edit
-// made during this editor session) and true if there's any history at
-// all, clearing both stacks for that step.
-func (h *imageHistory) resetStep(stepIndex int) ([]byte, bool) {
+// resetStep returns the step's very first recorded state (before any edit
+// made during this editor session). Reset is itself pushed onto the undo
+// stack rather than clearing history outright, so a reset can be undone
+// like any other edit instead of being a dead end.
+func (h *editHistory) resetStep(stepIndex int, current editSnapshot) (editSnapshot, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	stack := h.undo[stepIndex]
-	if len(stack) == 0 {
-		return nil, false
+	base, ok := h.baseline[stepIndex]
+	if !ok {
+		return editSnapshot{}, false
 	}
-	original := stack[0]
-	h.undo[stepIndex] = nil
-	h.redo[stepIndex] = nil
-	return original, true
+	h.undo[stepIndex] = append(h.undo[stepIndex], current)
+	delete(h.redo, stepIndex)
+	return base, true
 }

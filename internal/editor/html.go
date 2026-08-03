@@ -46,9 +46,16 @@ const editorCSS = `
   .img-toolbar button.armed.redact-btn { background: #7a2a2a; border-color: #a03c3c; }
   .img-toolbar button.armed.highlight-btn { background: #7a5a1a; border-color: #a07c2c; }
   .img-toolbar button.apply-btn { background: #2a5a3a; border-color: #3a7a4a; }
+  .img-toolbar button.style-selected { background: #2a4a6a; border-color: #3c6ca0; }
   .img-toolbar .sep { width: 1px; height: 1.2rem; background: #444; margin: 0 0.2rem; }
   .mode-hint { color: #999; font-size: 0.8rem; }
-  .img-frame { position: relative; }
+  /* inline-block, not block, so this shrink-wraps to the <img>'s actual
+     rendered box instead of stretching to the wrapper's full width —
+     annotation positions are percentages of this frame, so the frame's
+     box must exactly match the image's box or every percentage would be
+     computed against the wrong denominator whenever a screenshot renders
+     narrower than the page column. */
+  .img-frame { position: relative; display: inline-block; max-width: 100%; }
   .drag-overlay { position: absolute; display: none; pointer-events: auto; border: 2px dashed #fff; box-sizing: border-box; cursor: move; }
   .drag-overlay.redact { border-color: #ff5a5a; background: rgba(255, 0, 0, 0.15); }
   .drag-overlay.highlight { border-color: #ffb020; background: rgba(255, 176, 32, 0.15); }
@@ -60,10 +67,31 @@ const editorCSS = `
   .annotation-badge::-webkit-inner-spin-button, .annotation-badge::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .annotation-delete { position: absolute; top: -10px; right: -10px; width: 18px; height: 18px; border-radius: 50%; background: #444; color: #fff; border: 1px solid #666; font-size: 0.7rem; line-height: 1; cursor: pointer; padding: 0; z-index: 4; }
   .annotation-delete:hover { background: #666; }
+  .annotation-stack { position: absolute; top: -10px; right: 14px; display: flex; gap: 2px; z-index: 4; }
+  .annotation-stack button { width: 16px; height: 16px; border-radius: 3px; background: #444; color: #fff; border: 1px solid #666; font-size: 0.65rem; line-height: 1; cursor: pointer; padding: 0; }
+  .annotation-stack button:hover { background: #666; }
+  .annotation-stack button:disabled { opacity: 0.3; cursor: default; }
 `
 
 const editorJS = `
   var sessionData = null;
+  // stepEditors maps a step index to live handles into that step's
+  // already-rendered image editor DOM, so annotation and redaction edits
+  // can update just that step's view directly (mutate local data, patch
+  // the DOM) instead of re-fetching the whole session and rebuilding
+  // every step from scratch — that full-page-reload-per-edit pattern was
+  // also what caused annotations to intermittently render invisible: an
+  // edit's success handler would re-render before the browser had a
+  // settled layout for the freshly (re)inserted, browser-cached <img>,
+  // so annotation placement briefly read a zeroed layout. Annotation
+  // placement below no longer depends on layout at all (it positions
+  // annotations as percentages of the image's natural size, available as
+  // soon as the image decodes, whether or not it is even attached to the
+  // document yet) — so that failure mode is gone by construction, not by
+  // sequencing hacks — but going live-only for annotation/redaction edits
+  // is also just a better user experience: no flash, no lost scroll
+  // position, and it directly delivers "live annotation updates."
+  var stepEditors = {};
 
   function api(method, path, body) {
     return fetch(path, {
@@ -74,6 +102,10 @@ const editorJS = `
       if (!r.ok) return r.text().then(function(t) { throw new Error(t || r.statusText); });
       return r;
     });
+  }
+
+  function apiJSON(method, path, body) {
+    return api(method, path, body).then(function(r) { return r.json(); });
   }
 
   function load() {
@@ -102,6 +134,7 @@ const editorJS = `
   function render() {
     var container = document.getElementById('steps');
     container.innerHTML = '';
+    stepEditors = {};
     var order = fullOrder();
 
     order.forEach(function(idx, pos) {
@@ -158,7 +191,6 @@ const editorJS = `
           api('POST', '/api/caption', {index: step.index, note: ta.value}).then(function() {
             savedHint.classList.add('show');
             setTimeout(function() { savedHint.classList.remove('show'); }, 1500);
-            load();
           }).catch(function(e) { alert('Save failed: ' + e.message); });
         };
         row.appendChild(savedHint);
@@ -192,20 +224,37 @@ const editorJS = `
     var tmp = order[pos];
     order[pos] = order[newPos];
     order[newPos] = tmp;
-    api('POST', '/api/reorder', {order: order}).then(load);
+    api('POST', '/api/reorder', {order: order}).then(function() {
+      sessionData.display_order = order;
+      render();
+    });
   }
 
   function toggleHidden(idx) {
-    api('POST', '/api/hide', {index: idx, hidden: !isHidden(idx)}).then(load);
+    var hidden = !isHidden(idx);
+    api('POST', '/api/hide', {index: idx, hidden: hidden}).then(function() {
+      sessionData.hidden = sessionData.hidden || [];
+      var pos = sessionData.hidden.indexOf(idx);
+      if (hidden && pos === -1) sessionData.hidden.push(idx);
+      if (!hidden && pos !== -1) sessionData.hidden.splice(pos, 1);
+      render();
+    });
+  }
+
+  function imageSrc(step) {
+    return '/images/' + step.image_file.split('/').pop();
   }
 
   // buildImageEditor builds one step's screenshot, its always-live
   // numbered annotation markers (buildAnnotationElement — draggable,
-  // resizable, renumberable, deletable, committing immediately since
-  // they're non-destructive), and the toolbar for redacting (destructive,
-  // draw -> adjust -> Apply, undo/redo/reset) or adding a new highlight
+  // resizable, renumberable, deletable, reorderable in the stack,
+  // committing immediately since they're non-destructive), and the
+  // toolbar for redacting (destructive, draw -> adjust -> Apply, choice
+  // of solid/blur style, undo/redo/reset) or adding a new highlight
   // (non-destructive, same draw -> adjust -> Apply shape, but Apply
   // creates an annotation instead of baking pixels — see decision #18).
+  // It registers a stepEditors[step.index] entry so later API responses
+  // can update this step's view directly (see the stepEditors comment).
   function buildImageEditor(step) {
     var imgWrap = document.createElement('div');
     imgWrap.className = 'img-wrap';
@@ -213,6 +262,8 @@ const editorJS = `
     var toolbar = document.createElement('div');
     toolbar.className = 'img-toolbar';
     var redactBtn = mkPlainBtn('Draw Redaction', 'redact-btn');
+    var solidBtn = mkPlainBtn('Solid', 'style-selected');
+    var blurBtn = mkPlainBtn('Blur');
     var highlightBtn = mkPlainBtn('Draw Highlight', 'highlight-btn');
     var sep1 = document.createElement('span');
     sep1.className = 'sep';
@@ -225,15 +276,24 @@ const editorJS = `
     var resetBtn = mkPlainBtn('Reset');
     var modeHint = document.createElement('span');
     modeHint.className = 'mode-hint';
-    [redactBtn, highlightBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
+    [redactBtn, solidBtn, blurBtn, highlightBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
       .forEach(function(elm) { toolbar.appendChild(elm); });
     imgWrap.appendChild(toolbar);
+
+    var redactStyle = 'solid';
+    function setRedactStyle(style) {
+      redactStyle = style;
+      solidBtn.classList.toggle('style-selected', style === 'solid');
+      blurBtn.classList.toggle('style-selected', style === 'blur');
+    }
+    solidBtn.addEventListener('click', function() { setRedactStyle('solid'); });
+    blurBtn.addEventListener('click', function() { setRedactStyle('blur'); });
 
     var imgFrame = document.createElement('div');
     imgFrame.className = 'img-frame';
 
     var img = document.createElement('img');
-    img.src = '/images/' + step.image_file.split('/').pop();
+    img.src = imageSrc(step);
     img.alt = 'Step ' + step.index + ' screenshot';
     imgFrame.appendChild(img);
 
@@ -249,19 +309,55 @@ const editorJS = `
       return {corner: corner, el: h};
     });
 
-    function placeAnnotations() {
+    // renderAnnotations positions every annotation as a percentage of the
+    // image's natural (decoded) size — not a pixel ratio derived from the
+    // image's on-screen rendered size (img.clientWidth). naturalWidth/
+    // naturalHeight are available as soon as the browser has decoded the
+    // image, independent of whether it's attached to the document or has
+    // been laid out yet, so this never depends on DOM-attachment timing
+    // (the old bug: a cached image reports img.complete === true
+    // immediately, so placement ran before imgFrame had been appended
+    // and had a layout, reading clientWidth/Height as 0 and placing every
+    // annotation as an invisible 0x0 box). Percentages also self-correct
+    // on window resize for free, which pixel math never did.
+    function renderAnnotations() {
       imgFrame.querySelectorAll('.annotation').forEach(function(a) { a.remove(); });
-      (step.annotations || []).forEach(function(ann) {
-        imgFrame.appendChild(buildAnnotationElement(img, imgFrame, ann, step.index));
+      (step.annotations || []).forEach(function(ann, pos) {
+        imgFrame.appendChild(buildAnnotationElement(img, ann, pos, step, renderAnnotations));
       });
     }
     if (img.complete && img.naturalWidth) {
-      placeAnnotations();
+      renderAnnotations();
     } else {
-      img.addEventListener('load', placeAnnotations);
+      img.addEventListener('load', renderAnnotations);
     }
 
     imgWrap.appendChild(imgFrame);
+
+    stepEditors[step.index] = {
+      // setStepData is used after undo/redo/reset, which can change both
+      // the image bytes and the annotation list atomically — it replaces
+      // this step's local annotation data and re-renders the overlay, and
+      // the caller separately calls bustImageCache() since the image
+      // bytes may also have changed.
+      setStepData: function(newStep) {
+        step.annotations = newStep.annotations || [];
+        renderAnnotations();
+      },
+      addAnnotationLocal: function(ann) {
+        step.annotations = step.annotations || [];
+        step.annotations.push(ann);
+        renderAnnotations();
+      },
+      // bustImageCache forces a real re-fetch of the (possibly changed)
+      // image bytes — the filename never changes on redact/undo/redo/
+      // reset, only the bytes at that path, so the URL needs a
+      // cache-busting query param or the browser would keep showing what
+      // it already has cached for that exact URL.
+      bustImageCache: function() {
+        img.src = imageSrc(step) + '?t=' + Date.now();
+      },
+    };
 
     setupDrawing({
       img: img, imgFrame: imgFrame, overlay: overlay, handles: drawHandles,
@@ -269,6 +365,7 @@ const editorJS = `
       applyBtn: applyBtn, cancelBtn: cancelBtn,
       undoBtn: undoBtn, redoBtn: redoBtn, resetBtn: resetBtn,
       modeHint: modeHint, stepIndex: step.index,
+      getRedactStyle: function() { return redactStyle; },
     });
 
     return imgWrap;
@@ -286,22 +383,24 @@ const editorJS = `
   // corner handle to resize it (both committing via /api/annotation/update
   // as soon as the drag ends — no separate Apply, since editing an
   // annotation that already exists isn't destructive the way redaction
-  // is), edit the number badge directly, or delete it. Positions convert
-  // between the image's natural pixel space (what the API and annotation
-  // data use) and its on-screen CSS pixel space (what actually needs to
-  // render), using the same img.naturalWidth/clientWidth ratio the
-  // draw-new flow uses.
-  function buildAnnotationElement(img, imgFrame, ann, stepIndex) {
+  // is), edit the number badge directly, reorder it in the stack
+  // (front/back — array order is paint/z-order, so "front" moves an
+  // annotation later in step.annotations), or delete it. Positions are
+  // percentages of the image's natural size (see renderAnnotations for
+  // why); the drag/resize/commit math still converts through the
+  // rendered size, but only once a drag has actually started, by which
+  // point the element is necessarily attached and laid out (the user is
+  // looking at and dragging real on-screen pixels), so there's no
+  // placement-timing hazard there.
+  function buildAnnotationElement(img, ann, pos, step, onStackChanged) {
     var el = document.createElement('div');
     el.className = 'annotation';
 
     function place() {
-      var sx = img.clientWidth / img.naturalWidth;
-      var sy = img.clientHeight / img.naturalHeight;
-      el.style.left = (ann.x * sx) + 'px';
-      el.style.top = (ann.y * sy) + 'px';
-      el.style.width = (ann.w * sx) + 'px';
-      el.style.height = (ann.h * sy) + 'px';
+      el.style.left = (ann.x / img.naturalWidth * 100) + '%';
+      el.style.top = (ann.y / img.naturalHeight * 100) + '%';
+      el.style.width = (ann.w / img.naturalWidth * 100) + '%';
+      el.style.height = (ann.h / img.naturalHeight * 100) + '%';
     }
     place();
 
@@ -320,10 +419,46 @@ const editorJS = `
     del.addEventListener('mousedown', function(e) { e.stopPropagation(); });
     del.addEventListener('click', function(e) {
       e.stopPropagation();
-      api('POST', '/api/annotation/delete', {index: stepIndex, id: ann.id}).then(load)
-        .catch(function(e2) { alert('Delete failed: ' + e2.message); });
+      api('POST', '/api/annotation/delete', {index: step.index, id: ann.id}).then(function() {
+        step.annotations = (step.annotations || []).filter(function(a) { return a.id !== ann.id; });
+        onStackChanged();
+      }).catch(function(e2) { alert('Delete failed: ' + e2.message); });
     });
     el.appendChild(del);
+
+    var stackCtl = document.createElement('div');
+    stackCtl.className = 'annotation-stack';
+    var backBtn = document.createElement('button');
+    backBtn.textContent = '‹';
+    backBtn.title = 'Send backward';
+    backBtn.disabled = pos === 0;
+    var frontBtn = document.createElement('button');
+    frontBtn.textContent = '›';
+    frontBtn.title = 'Bring forward';
+    frontBtn.disabled = pos === (step.annotations || []).length - 1;
+    [backBtn, frontBtn].forEach(function(b) {
+      b.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    });
+    function moveInStack(delta) {
+      var anns = step.annotations || [];
+      var newPos = pos + delta;
+      if (newPos < 0 || newPos >= anns.length) return;
+      var order = anns.map(function(a) { return a.id; });
+      var tmp = order[pos];
+      order[pos] = order[newPos];
+      order[newPos] = tmp;
+      api('POST', '/api/annotation/reorder', {index: step.index, order: order}).then(function() {
+        var swapped = anns[pos];
+        anns[pos] = anns[newPos];
+        anns[newPos] = swapped;
+        onStackChanged();
+      }).catch(function(e) { alert('Reorder failed: ' + e.message); });
+    }
+    backBtn.addEventListener('click', function(e) { e.stopPropagation(); moveInStack(-1); });
+    frontBtn.addEventListener('click', function(e) { e.stopPropagation(); moveInStack(1); });
+    stackCtl.appendChild(backBtn);
+    stackCtl.appendChild(frontBtn);
+    el.appendChild(stackCtl);
 
     var handles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
       var h = document.createElement('div');
@@ -342,13 +477,13 @@ const editorJS = `
       var number = parseInt(badge.value, 10);
       if (isNaN(number)) number = ann.number;
       ann.x = x; ann.y = y; ann.w = w; ann.h = h; ann.number = number;
-      api('POST', '/api/annotation/update', {index: stepIndex, id: ann.id, x: x, y: y, w: w, h: h, number: number})
-        .catch(function(e) { alert('Update failed: ' + e.message); load(); });
+      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: number})
+        .catch(function(e) { alert('Update failed: ' + e.message); onStackChanged(); });
     }
 
     var dragging = null;
     el.addEventListener('mousedown', function(e) {
-      if (e.target !== el) return; // a child (badge/delete/handle) handles its own mousedown
+      if (e.target !== el) return; // a child (badge/delete/stack/handle) handles its own mousedown
       e.preventDefault();
       dragging = {type: 'move', startX: e.clientX, startY: e.clientY, origLeft: el.offsetLeft, origTop: el.offsetTop};
     });
@@ -396,19 +531,16 @@ const editorJS = `
   // Draw Redaction and Draw Highlight: arm a mode, drag on the image to
   // sketch a rectangle, adjust it (move the body, resize from a corner
   // handle), then Apply — which POSTs to /api/edit-image for redaction
-  // (destructive, pixel-mutating) or /api/annotation for a highlight
-  // (creates a new, subsequently always-editable annotation). Nothing is
-  // sent to the server until Apply either way.
+  // (destructive, pixel-mutating, solid or blur per getRedactStyle()) or
+  // /api/annotation for a highlight (creates a new, subsequently always-
+  // editable annotation, applied live via addAnnotationLocal — no
+  // reload). Nothing is sent to the server until Apply either way.
   //
   // All coordinates are tracked relative to imgFrame — the element that
   // directly and only wraps the <img> and its overlay/handles/existing
   // annotations, so a pixel measured relative to imgFrame's top-left
   // lands in exactly the same spot whether computing where the mouse is
-  // or where to draw the overlay. (An earlier version measured the mouse
-  // relative to the <img> itself but positioned the overlay relative to a
-  // wrapper that also contained the toolbar above it, so every rectangle
-  // appeared shifted up by roughly the toolbar's height — fixed by
-  // construction here, not by hand-tuning an offset.)
+  // or where to draw the overlay.
   function setupDrawing(el) {
     var armedMode = null;
     var pending = null; // {mode, x, y, w, h} in on-screen px, relative to imgFrame
@@ -539,22 +671,29 @@ const editorJS = `
 
     el.applyBtn.addEventListener('click', function() {
       if (!pending) return;
+      var mode = pending.mode;
       var scaleX = el.img.naturalWidth / el.img.clientWidth;
       var scaleY = el.img.naturalHeight / el.img.clientHeight;
       var rect = {
         x: pending.x * scaleX, y: pending.y * scaleY,
         w: pending.w * scaleX, h: pending.h * scaleY,
       };
-      var request = pending.mode === 'redact'
-        ? api('POST', '/api/edit-image', Object.assign({index: el.stepIndex, action: 'redact'}, rect))
-        : api('POST', '/api/annotation', Object.assign({index: el.stepIndex}, rect));
-      request.then(function() {
+      var request = mode === 'redact'
+        ? apiJSON('POST', '/api/edit-image', Object.assign({index: el.stepIndex, style: el.getRedactStyle()}, rect))
+        : apiJSON('POST', '/api/annotation', Object.assign({index: el.stepIndex}, rect));
+      request.then(function(data) {
         pending = null;
         setArmed(null);
         renderOverlay();
         showApplyBar(false);
         updateButtonStates();
-        load();
+        var editor = stepEditors[el.stepIndex];
+        if (mode === 'redact') {
+          editor.setStepData(data);
+          editor.bustImageCache();
+        } else {
+          editor.addAnnotationLocal(data);
+        }
       }).catch(function(e) { alert('Edit failed: ' + e.message); });
     });
 
@@ -567,17 +706,26 @@ const editorJS = `
     });
 
     el.undoBtn.addEventListener('click', function() {
-      api('POST', '/api/image-undo', {index: el.stepIndex}).then(load)
-        .catch(function(e) { alert(e.message || 'Nothing to undo.'); });
+      apiJSON('POST', '/api/undo', {index: el.stepIndex}).then(function(step) {
+        var editor = stepEditors[el.stepIndex];
+        editor.setStepData(step);
+        editor.bustImageCache();
+      }).catch(function(e) { alert(e.message || 'Nothing to undo.'); });
     });
     el.redoBtn.addEventListener('click', function() {
-      api('POST', '/api/image-redo', {index: el.stepIndex}).then(load)
-        .catch(function(e) { alert(e.message || 'Nothing to redo.'); });
+      apiJSON('POST', '/api/redo', {index: el.stepIndex}).then(function(step) {
+        var editor = stepEditors[el.stepIndex];
+        editor.setStepData(step);
+        editor.bustImageCache();
+      }).catch(function(e) { alert(e.message || 'Nothing to redo.'); });
     });
     el.resetBtn.addEventListener('click', function() {
       if (!confirm('Discard all edits made to this screenshot in this editing session?')) return;
-      api('POST', '/api/image-reset', {index: el.stepIndex}).then(load)
-        .catch(function(e) { alert(e.message || 'Nothing to reset.'); });
+      apiJSON('POST', '/api/reset', {index: el.stepIndex}).then(function(step) {
+        var editor = stepEditors[el.stepIndex];
+        editor.setStepData(step);
+        editor.bustImageCache();
+      }).catch(function(e) { alert(e.message || 'Nothing to reset.'); });
     });
   }
 

@@ -739,6 +739,190 @@ editor's "Draw Highlight" button uses; what's specifically unconfirmed is
 the click daemon's own coordinate math (click position → window-relative
 point → pixel-space bounding box) ahead of that call.
 
+## 19. Unified annotation/redaction history, and blur as a second redaction style
+
+Decided 2026-08-03. Prompted directly by real usage of decision #18's
+system: adding a highlight, hitting Apply, and having it render as an
+invisible box — reproducible every time the browser had the step's
+screenshot cached (i.e. every time after the first page load). Root
+cause: `buildImageEditor`'s `placeAnnotations()` ran synchronously
+whenever `img.complete` was already true (the cached-image case),
+*before* `imgFrame` had been appended into the document — so
+`img.clientWidth`/`clientHeight`, which annotation placement divided by,
+read as 0 for a still-detached element. The annotation was written to
+disk correctly the whole time; only its on-screen box was zeroed.
+
+A quick patch (defer placement a frame via `requestAnimationFrame` when
+the image is already complete) was written, verified to fix the repro,
+and then explicitly discarded at the user's direction in favor of a
+foundational rebuild: *"think properly, and create a proper highlight
+system... build a core foundation of highlight system first — history,
+undo redo, moveables, annotations, stack of highlights and move the
+order... live annotations update... build a core foundation strong and
+error prone[sic, "-free"]. and then go to UI layer."* That's a fair
+read of what shipped in #18: redaction had its own undo/redo/reset
+(`internal/editor/history.go`'s `imageHistory`, image-bytes-only),
+annotations had none, and the two could never be undone as a single
+coherent sequence even though a user editing a screenshot experiences
+them as one activity. Patching the placement bug alone would have left
+that structural gap in place.
+
+**What changed, bottom-up:**
+
+1. **`internal/session`**: `AddAnnotation` now returns the created
+   `Annotation` (was `(*Session, error)`, now `(Annotation, *Session,
+   error)`) so the editor can hand it straight back to the frontend
+   without a follow-up fetch. Two new low-level primitives:
+   `SetAnnotations` (overwrite a step's whole annotation list —
+   deliberately *unlogged*, since it's a restore operation the caller
+   logs once as a semantic action, not a fresh edit) and
+   `ReorderAnnotations` (validates the given ID list is exactly a
+   permutation of the step's existing annotations, then replaces the
+   slice in that order — array order *is* z-order/paint order, by
+   construction, so there's no separate z-index field to ever drift out
+   of sync with it).
+
+2. **`internal/editor/history.go`**: replaced the old `imageHistory`
+   (undo/redo stacks of `[]byte`, one per step) with `editHistory` —
+   undo/redo/baseline stacks of `editSnapshot{Image []byte, Annotations
+   []session.Annotation}`, one unit per step per point in time. Every
+   mutating endpoint pushes the *before* state onto `undo` right before
+   applying its change; `undoStep`/`redoStep` pop-and-swap between the
+   two stacks the usual way. `resetStep` returns the first snapshot ever
+   pushed for that step (the true pre-edit baseline) but — deliberately
+   — pushes the current state onto `undo` first rather than clearing
+   history outright, so Reset is itself one more undoable edit instead
+   of a dead end. This is genuinely one history, not two coordinated
+   ones: an Undo after a redact-then-highlight sequence removes the
+   highlight first, then the redaction, in the exact order they
+   happened, regardless of which kind of edit either one was.
+
+3. **`internal/editor/editor.go`**: every mutating handler
+   (`/api/edit-image`, `/api/annotation`, `/api/annotation/update`,
+   `/api/annotation/delete`, and the new `/api/annotation/reorder`)
+   snapshots the step via `stepSnapshot` immediately before calling the
+   matching `session.*` function, then pushes that snapshot onto
+   `editHistory`. `/api/image-undo`/`-redo`/`-reset` were replaced with
+   unified `/api/undo`/`/api/redo`/`/api/reset` (body: `{index}` only —
+   no notion of "image undo" vs "annotation undo" anymore, just "undo").
+   `applySnapshot` restores both halves of a snapshot: image bytes
+   written straight to the step's file (if the snapshot has any — a
+   step's annotations can be undone independently of whether its image
+   ever changed) and `session.SetAnnotations` for the annotation list.
+   Every mutating endpoint now responds with the affected
+   `session.Step` (or, for creation, the created `Annotation`) as JSON,
+   instead of `204 No Content` — needed for the frontend change below.
+
+4. **`internal/editor/html.go`**: the actual placement bug is fixed by
+   removing its precondition, not by sequencing around it. Annotation
+   position/size are now percentages of the image's *natural* (decoded)
+   size — `ann.x / img.naturalWidth * 100 + '%'` — rather than pixels
+   scaled by `img.clientWidth`. `naturalWidth`/`naturalHeight` are set as
+   soon as the browser has decoded the image data, independent of
+   whether that `<img>` is attached to the document or has been laid out
+   at all; `clientWidth`/`clientHeight` need both. So placement can no
+   longer race attachment, for any image, cached or not — this isn't a
+   narrower version of the old bug, it's a different mechanism that
+   doesn't have the bug's precondition. (One supporting fix `.img-frame`
+   needed: `display: inline-block` instead of the default block, so the
+   frame's box always shrink-wraps to the image's actual rendered size —
+   otherwise percentages-of-frame and percentages-of-image silently
+   diverge whenever a screenshot renders narrower than the page column.)
+
+   Separately, and because the underlying data model now supports it
+   cleanly: annotation create/update/delete/reorder and redact/undo/redo/
+   reset no longer trigger a full `/api/session` refetch and page
+   re-render. A small `stepEditors` registry keyed by step index holds
+   live handles (`setStepData`, `addAnnotationLocal`, `bustImageCache`)
+   into each already-rendered step's DOM, so a successful edit patches
+   local state and re-renders just that step's annotation overlay (or,
+   for image bytes, appends a cache-busting query param to force a
+   refetch of the one image that actually changed — the filename itself
+   never changes on redact/undo/redo/reset). Reorder/hide/caption still
+   go through the original full-session `load()` path, since they affect
+   step ordering across the whole page; that remains safe now regardless
+   of image-cache state, for the same reason the placement bug itself is
+   gone. Each annotation also gained `‹`/`›` stack controls (send
+   backward / bring forward) wired to `/api/annotation/reorder`.
+
+**Second, smaller change bundled into this pass**, from the same
+message: redaction now supports two styles, `capture.RedactStyleSolid`
+(the existing opaque-black fill — the only style safe for actual secrets,
+genuinely unrecoverable) and `capture.RedactStyleBlur` (a new 3-pass box
+blur, `internal/capture/annotate.go`'s `blurRect` — three passes of box
+blur is a standard, cheap approximation of a Gaussian blur). Blur is
+explicitly *not* claimed to be cryptographically irreversible — it exists
+for obscuring something (a face in a demo, a distracting background
+element) where pixel-level unrecoverability was never the requirement,
+not as an alternative for secrets. `session.EditImage`'s signature
+changed from an `action` parameter (redact was already its only valid
+value) to `style`, defaulting to solid when empty. The editor toolbar
+gained a Solid/Blur toggle next to Draw Redaction.
+
+**Explicitly deferred** (from the same follow-up message, to keep this
+pass foundation-focused rather than growing indefinitely): a dedicated
+editor-modal UI, freehand/hand-drawn annotations, image cropping, and a
+color picker for highlights. None of these are blocked by anything
+built here — front/back stacking, undo/redo/reset, and live updates are
+all generic over "what kind of annotation," not hardcoded to rectangles.
+
+**Verified in layers:**
+
+1. Unit tests: `TestRedactBlurObscuresRegionButLeavesRestUntouched`
+   (new) — a hard two-color split image, since the existing solid-fill
+   test's flat single-color fixture can't demonstrate blur at all
+   (averaging a uniform color with itself is a no-op); confirms the
+   boundary pixel inside the blurred rect is neither pure input color
+   (i.e. blending actually happened) and that pixels just outside the
+   rect on both sides are completely untouched (checks the box blur's
+   read window doesn't leak past the intended region). Existing solid
+   redact and annotation-rendering tests updated for the `Redact`
+   signature change and re-passing.
+2. `go build ./... && go vet ./... && gofmt -l .` clean throughout.
+3. Full interactive re-verification against a live editor on a real
+   session (`test3`, real captured screenshots), using the same precise
+   synthetic-`MouseEvent` method as decisions #17/#18:
+   - **The actual regression repro**: created a highlight, confirmed it
+     rendered immediately (250×180px, matching the drawn rectangle,
+     confirmed via `getBoundingClientRect` — not just visually). Then
+     did a real full-page navigation (not the app's own `load()`) back
+     to the same URL and confirmed `img.complete === true` immediately
+     on the fresh load — the exact cached-image precondition that used
+     to zero out placement — and confirmed the annotation still rendered
+     at its correct size and position. This is the one check that
+     actually matters for this decision; everything else is regression
+     coverage.
+   - Added a second annotation live (no reload) — both visible
+     simultaneously with distinct badges.
+   - Reordered via the new `‹`/`›` controls; confirmed via
+     `GET /api/session` that stored array order actually swapped
+     (`[1, 2]` → `[2, 1]`).
+   - Renumbered a badge directly (`5`); confirmed via the API that `id`
+     stayed fixed while `number` changed, and that it persisted.
+   - Applied a **blur** redaction; confirmed `EditLog` recorded
+     `"blur rect(...)"`; confirmed via `md5` of the on-disk PNG that the
+     bytes actually changed and that the served `<img src>` carried a
+     fresh cache-busting `?t=` query param.
+   - **Undo**: confirmed the image reverted to its pre-blur checksum
+     *and* both annotations (including the renumber and reorder from
+     earlier) reappeared correctly — proof the history is genuinely
+     unified, not "image undo happened to run right after annotation
+     state was already there."
+   - **Redo**: confirmed the blur checksum came back exactly.
+   - **Reset**: confirmed the image returned to its original
+     pre-session checksum and the annotation list emptied entirely.
+   - **Undo after Reset**: confirmed the full pre-reset state (blurred
+     image, both annotations) came back — proof Reset is itself
+     undoable, per the `resetStep` design above, not a dead end.
+   - **Delete**: removed one annotation live; confirmed only the other
+     remained, both on screen and via the API.
+
+**Not verified**: the automatic click-daemon's annotation creation from
+a real physical click, for the same standing reason as decisions #15,
+#17, and #18 — this environment can't synthesize a real OS-level click.
+`AddAnnotation` itself is exercised thoroughly above via the identical
+path the editor's "Draw Highlight" button uses.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

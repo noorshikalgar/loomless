@@ -37,7 +37,7 @@ func TestRedactFillsRegionSolidBlackAndLeavesRestUntouched(t *testing.T) {
 	original := color.RGBA{R: 200, G: 100, B: 50, A: 255}
 	src := solidTestImage(t, original)
 
-	edited, err := Redact(src, 20, 20, 30, 30) // rect [20,50) x [20,50)
+	edited, err := Redact(src, 20, 20, 30, 30, RedactStyleSolid) // rect [20,50) x [20,50)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -60,6 +60,66 @@ func TestRedactFillsRegionSolidBlackAndLeavesRestUntouched(t *testing.T) {
 		got := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
 		if got != original {
 			t.Errorf("pixel %v outside redacted rect = %v, want unchanged original %v", p, got, original)
+		}
+	}
+}
+
+// TestRedactBlurObscuresRegionButLeavesRestUntouched checks the blur style
+// against a genuinely blurrable image (a hard-edged two-color split) —
+// solidTestImage's single flat fill can't demonstrate blur at all, since
+// averaging a uniform color with itself is a no-op. The region-outside
+// check matters most here: unlike solid fill, blur reads neighboring
+// pixels while writing, so a bug that leaks the box-blur read/write past
+// the intended rect would otherwise go unnoticed.
+func TestRedactBlurObscuresRegionButLeavesRestUntouched(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	left := color.RGBA{R: 255, G: 0, B: 0, A: 255}
+	right := color.RGBA{R: 0, G: 0, B: 255, A: 255}
+	for y := 0; y < 100; y++ {
+		for x := 0; x < 100; x++ {
+			c := left
+			if x >= 50 {
+				c = right
+			}
+			img.SetRGBA(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode test image: %v", err)
+	}
+	src := buf.Bytes()
+
+	edited, err := Redact(src, 40, 10, 20, 20, RedactStyleBlur) // rect [40,60) x [10,30), straddles the color split
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	decoded := decodePNG(t, edited)
+
+	// Right at the color boundary inside the blurred rect, blending must
+	// have happened: neither pure left nor pure right color survives.
+	r, g, b, _ := decoded.At(49, 20).RGBA()
+	got := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8)}
+	if got == (color.RGBA{R: 255, G: 0, B: 0}) || got == (color.RGBA{R: 0, G: 0, B: 255}) {
+		t.Errorf("pixel (49,20) inside blurred rect = %v, want a blend of red and blue, not either pure color", got)
+	}
+
+	// Outside the rect, both flat-color regions must be completely
+	// untouched — no bleed from the box blur's read window.
+	outside := []struct {
+		p    image.Point
+		want color.RGBA
+	}{
+		{image.Point{10, 10}, left},
+		{image.Point{90, 90}, right},
+		{image.Point{39, 20}, left},  // just left of the rect's left edge
+		{image.Point{60, 20}, right}, // just right of the rect's right edge
+	}
+	for _, tc := range outside {
+		r, g, b, a := decoded.At(tc.p.X, tc.p.Y).RGBA()
+		got := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+		if got != tc.want {
+			t.Errorf("pixel %v outside blurred rect = %v, want unchanged %v", tc.p, got, tc.want)
 		}
 	}
 }
