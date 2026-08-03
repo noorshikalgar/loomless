@@ -39,7 +39,7 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 
 	for _, step := range steps {
 		b.WriteString("<section class=\"slide\">\n")
-		fmt.Fprintf(&b, "<h2>Step %d</h2>\n", step.Index)
+		fmt.Fprintf(&b, "<h2>%s</h2>\n", html.EscapeString(stepHeading(step)))
 
 		if step.Command != "" {
 			fmt.Fprintf(&b, "<pre class=\"cmd\">$ %s</pre>\n", html.EscapeString(step.Command))

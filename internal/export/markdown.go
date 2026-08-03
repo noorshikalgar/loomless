@@ -32,7 +32,7 @@ func Markdown(s *session.Session, dir string) string {
 	}
 
 	for _, step := range steps {
-		fmt.Fprintf(&b, "## Step %d\n\n", step.Index)
+		fmt.Fprintf(&b, "## %s\n\n", stepHeading(step))
 
 		if step.Command != "" {
 			fmt.Fprintf(&b, "```bash\n$ %s\n```\n\n", step.Command)

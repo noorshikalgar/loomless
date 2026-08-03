@@ -22,6 +22,7 @@ import (
 // Output/OutputFile) — a step has one or the other, not necessarily both.
 type Step struct {
 	Index       int       `json:"index"`
+	Title       string    `json:"title,omitempty"` // user override for the step heading; empty means "Step <Index>"
 	Timestamp   time.Time `json:"timestamp"`
 	Note        string    `json:"note"`
 	WindowApp   string    `json:"window_app,omitempty"`
@@ -561,6 +562,83 @@ func EditNote(name string, stepIndex int, newNote string) (*Session, error) {
 	s.EditLog = append(s.EditLog, EditEntry{
 		Timestamp: time.Now(), Action: "edit_note", StepIndex: stepIndex,
 		OldValue: oldNote, NewValue: maskedNote,
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// EditTitle reloads the named session and sets a step's display title —
+// the user-facing override for the "Step <Index>" heading every exporter
+// and the editor otherwise fall back to. An empty title clears the
+// override rather than being rejected, since "go back to the default
+// heading" is a legitimate edit, not an error. Masked the same way Note
+// is: a custom title is free-text a user typed, just as capable of
+// carrying a pasted secret as a caption.
+func EditTitle(name string, stepIndex int, newTitle string) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	maskedTitle, matched := mask.Text(newTitle)
+	found := false
+	var oldTitle string
+	for i := range s.Steps {
+		if s.Steps[i].Index == stepIndex {
+			oldTitle = s.Steps[i].Title
+			s.Steps[i].Title = maskedTitle
+			s.Steps[i].Masked = mergeRules(s.Steps[i].Masked, matched)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	}
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "edit_title", StepIndex: stepIndex,
+		OldValue: oldTitle, NewValue: maskedTitle,
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// EditWindowInfo reloads the named session and overwrites a step's
+// WindowApp/WindowTitle — captured automatically at record time, but not
+// always accurate (a generic process name, a stale title) or what the
+// user wants to show in the finished story. Masked the same way
+// WindowTitle already is at capture time (see AddStep).
+func EditWindowInfo(name string, stepIndex int, app, windowTitle string) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	maskedTitle, matched := mask.Text(windowTitle)
+	found := false
+	var oldApp, oldTitle string
+	for i := range s.Steps {
+		if s.Steps[i].Index == stepIndex {
+			oldApp, oldTitle = s.Steps[i].WindowApp, s.Steps[i].WindowTitle
+			s.Steps[i].WindowApp = app
+			s.Steps[i].WindowTitle = maskedTitle
+			s.Steps[i].Masked = mergeRules(s.Steps[i].Masked, matched)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	}
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "edit_window", StepIndex: stepIndex,
+		OldValue: oldApp + " — " + oldTitle, NewValue: app + " — " + maskedTitle,
 	})
 	if err := save(dir, s); err != nil {
 		return nil, err

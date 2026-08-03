@@ -29,7 +29,6 @@ const editorCSS = `
   .step-header button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
   .step-header button:hover { background: #3a3a42; }
   .step-header button:disabled { opacity: 0.3; cursor: default; }
-  .window { font-weight: 600; color: #8ab4ff; font-size: 0.9rem; margin-bottom: 0.5rem; }
   textarea { width: 100%; min-height: 3rem; background: #17171a; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.5rem; font-family: inherit; font-size: 0.95rem; resize: vertical; }
   .save-row { display: flex; justify-content: flex-end; margin-top: 0.4rem; gap: 0.5rem; align-items: center; }
   .save-row button { background: #2a5a3a; color: #f0f0f0; border: 1px solid #3a7a4a; border-radius: 4px; padding: 0.4rem 0.9rem; cursor: pointer; }
@@ -63,14 +62,44 @@ const editorCSS = `
   .handle-nw, .handle-se { cursor: nwse-resize; }
   .handle-ne, .handle-sw { cursor: nesw-resize; }
   .annotation { position: absolute; border: 3px solid #ff3b30; box-sizing: border-box; cursor: move; z-index: 3; }
-  .annotation-badge { position: absolute; top: -12px; left: -12px; width: 24px; height: 24px; border-radius: 50%; background: #ff3b30; color: #fff; border: 1px solid #a03c3c; text-align: center; font-size: 0.7rem; padding: 0; font-family: inherit; z-index: 4; }
-  .annotation-badge::-webkit-inner-spin-button, .annotation-badge::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  .annotation-delete { position: absolute; top: -10px; right: -10px; width: 18px; height: 18px; border-radius: 50%; background: #444; color: #fff; border: 1px solid #666; font-size: 0.7rem; line-height: 1; cursor: pointer; padding: 0; z-index: 4; }
-  .annotation-delete:hover { background: #666; }
-  .annotation-stack { position: absolute; top: -10px; right: 14px; display: flex; gap: 2px; z-index: 4; }
-  .annotation-stack button { width: 16px; height: 16px; border-radius: 3px; background: #444; color: #fff; border: 1px solid #666; font-size: 0.65rem; line-height: 1; cursor: pointer; padding: 0; }
-  .annotation-stack button:hover { background: #666; }
-  .annotation-stack button:disabled { opacity: 0.3; cursor: default; }
+  /* Resize handles on an EXISTING annotation are chrome, not content —
+     shown only on hover/pin, same as the toolbar, so the default view of
+     an annotated screenshot is just the highlight and its number, not a
+     cluttered edit-mode look. */
+  .annotation .resize-handle { display: none; }
+  .annotation:hover .resize-handle, .annotation.pinned .resize-handle { display: block; }
+  .annotation-badge { position: absolute; top: -11px; left: -11px; width: 22px; height: 22px; border-radius: 50%; background: #ff3b30; color: #fff; border: 1px solid #a03c3c; text-align: center; line-height: 20px; font-size: 0.7rem; font-family: inherit; z-index: 4; pointer-events: none; user-select: none; }
+  /* The toolbar (renumber / reorder / delete) is chrome that only makes
+     sense while actively editing an annotation — like a word processor's
+     floating selection toolbar, it stays out of the way until you hover
+     or click the annotation, rather than permanently overlapping the
+     badge the way a delete "x" and stack buttons used to. */
+  .annotation-toolbar {
+    position: absolute; left: 50%; top: 0; transform: translate(-50%, calc(-100% - 10px));
+    display: none; align-items: center; gap: 3px;
+    background: #2a2a30; border: 1px solid #444; border-radius: 6px; padding: 3px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.4); z-index: 5; white-space: nowrap;
+  }
+  .annotation:hover .annotation-toolbar, .annotation.pinned .annotation-toolbar { display: flex; }
+  /* Annotations near the top of the image would have their toolbar
+     clipped off the top of the frame — flipped below instead (JS adds
+     this class based on the annotation's vertical position). */
+  .annotation.toolbar-below .annotation-toolbar { top: 100%; transform: translate(-50%, 10px); }
+  .annotation-toolbar input[type=number] { width: 2.8rem; background: #17171a; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.15rem 0.3rem; font-size: 0.75rem; font-family: inherit; }
+  .annotation-toolbar input::-webkit-inner-spin-button, .annotation-toolbar input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .annotation-toolbar button { background: #333338; color: #f0f0f0; border: 1px solid #4a4a50; border-radius: 4px; width: 22px; height: 22px; font-size: 0.75rem; line-height: 1; cursor: pointer; padding: 0; }
+  .annotation-toolbar button:hover { background: #45454c; }
+  .annotation-toolbar button:disabled { opacity: 0.3; cursor: default; }
+  .annotation-toolbar button.annotation-delete-btn:hover { background: #7a2a2a; border-color: #a03c3c; }
+  .annotation-toolbar .toolbar-sep { width: 1px; height: 16px; background: #444; margin: 0 1px; }
+  .step-title { display: flex; align-items: center; gap: 0.4rem; flex: 1; }
+  .step-title h2 { cursor: text; }
+  .step-title h2:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
+  .step-title input { font-size: 1.1rem; font-weight: 600; color: #8ab4ff; background: #17171a; border: 1px solid #444; border-radius: 4px; padding: 0.15rem 0.4rem; font-family: inherit; flex: 1; min-width: 0; }
+  .window-line { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; margin-bottom: 0.5rem; }
+  .window-line span { cursor: text; color: #8ab4ff; font-weight: 600; }
+  .window-line span:hover { text-decoration: underline dotted; text-underline-offset: 2px; }
+  .window-line input { font-size: 0.9rem; font-weight: 600; color: #8ab4ff; background: #17171a; border: 1px solid #444; border-radius: 4px; padding: 0.1rem 0.35rem; font-family: inherit; }
 `
 
 const editorJS = `
@@ -146,9 +175,7 @@ const editorJS = `
 
       var header = document.createElement('div');
       header.className = 'step-header';
-      var h2 = document.createElement('h2');
-      h2.textContent = 'Step ' + step.index;
-      header.appendChild(h2);
+      header.appendChild(buildStepTitle(step));
 
       var upBtn = mkBtn('↑', pos === 0, function() { moveStep(pos, -1); });
       var downBtn = mkBtn('↓', pos === order.length - 1, function() { moveStep(pos, 1); });
@@ -158,11 +185,8 @@ const editorJS = `
       header.appendChild(hideBtn);
       el.appendChild(header);
 
-      if (step.window_app) {
-        var w = document.createElement('div');
-        w.className = 'window';
-        w.textContent = step.window_app + (step.window_title ? ' — ' + step.window_title : '');
-        el.appendChild(w);
+      if (!step.command) {
+        el.appendChild(buildWindowLine(step));
       }
 
       if (step.command) {
@@ -212,6 +236,132 @@ const editorJS = `
     b.disabled = disabled;
     b.addEventListener('click', onclick);
     return b;
+  }
+
+  // buildStepTitle renders the step heading as click-to-edit text: shows
+  // "Step N" (or the stored override) as plain text; clicking swaps in a
+  // text input, Enter or blur commits, Escape cancels. Typing the default
+  // text back (or clearing it) removes the override rather than storing
+  // it literally, so "Step 1" only ever means "no custom title" on disk.
+  function buildStepTitle(step) {
+    var wrap = document.createElement('div');
+    wrap.className = 'step-title';
+
+    function defaultTitle() { return 'Step ' + step.index; }
+
+    function show() {
+      wrap.innerHTML = '';
+      var h2 = document.createElement('h2');
+      h2.textContent = step.title || defaultTitle();
+      h2.title = 'Click to rename';
+      h2.addEventListener('click', edit);
+      wrap.appendChild(h2);
+    }
+
+    function commit(value) {
+      var trimmed = value.trim();
+      var newTitle = (trimmed === '' || trimmed === defaultTitle()) ? '' : trimmed;
+      if (newTitle === (step.title || '')) { show(); return; }
+      api('POST', '/api/title', {index: step.index, title: newTitle}).then(function() {
+        step.title = newTitle;
+        show();
+      }).catch(function(e) { alert('Rename failed: ' + e.message); show(); });
+    }
+
+    function edit() {
+      wrap.innerHTML = '';
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.value = step.title || defaultTitle();
+      wrap.appendChild(input);
+      input.focus();
+      input.select();
+      input.onblur = function() { commit(input.value); };
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { input.blur(); }
+        else if (e.key === 'Escape') { input.onblur = null; show(); }
+      });
+    }
+
+    show();
+    return wrap;
+  }
+
+  // buildWindowLine renders the captured app/window-title line the same
+  // click-to-edit way — either field can be corrected or filled in by
+  // hand (a generic process name, a stale title, or nothing captured at
+  // all), independent of the automatic capture that originally populated
+  // them.
+  function buildWindowLine(step) {
+    var wrap = document.createElement('div');
+    wrap.className = 'window-line';
+
+    function show() {
+      wrap.innerHTML = '';
+      var appSpan = document.createElement('span');
+      appSpan.textContent = step.window_app || '+ add app';
+      appSpan.title = 'Click to edit';
+      appSpan.addEventListener('click', edit);
+      wrap.appendChild(appSpan);
+
+      var titleSpan = document.createElement('span');
+      titleSpan.style.color = '#ccc';
+      titleSpan.style.fontWeight = 'normal';
+      titleSpan.textContent = step.window_title ? (' — ' + step.window_title) : '';
+      titleSpan.title = 'Click to edit';
+      titleSpan.addEventListener('click', edit);
+      wrap.appendChild(titleSpan);
+    }
+
+    function edit() {
+      wrap.innerHTML = '';
+      var appInput = document.createElement('input');
+      appInput.type = 'text';
+      appInput.placeholder = 'App';
+      appInput.value = step.window_app || '';
+      var titleInput = document.createElement('input');
+      titleInput.type = 'text';
+      titleInput.placeholder = 'Window title';
+      titleInput.value = step.window_title || '';
+      wrap.appendChild(appInput);
+      wrap.appendChild(titleInput);
+      appInput.focus();
+      appInput.select();
+
+      var settled = false;
+      function commit() {
+        if (settled) return;
+        settled = true;
+        var app = appInput.value.trim(), title = titleInput.value.trim();
+        if (app === (step.window_app || '') && title === (step.window_title || '')) { show(); return; }
+        api('POST', '/api/window', {index: step.index, window_app: app, window_title: title}).then(function() {
+          step.window_app = app;
+          step.window_title = title;
+          show();
+        }).catch(function(e) { alert('Update failed: ' + e.message); show(); });
+      }
+      function cancel() {
+        settled = true;
+        show();
+      }
+      [appInput, titleInput].forEach(function(inp) {
+        inp.addEventListener('blur', function() {
+          // A blur caused by tabbing to the OTHER field in this pair
+          // isn't "leaving" the edit — give focus a tick to land there
+          // before deciding the user actually moved on.
+          setTimeout(function() {
+            if (!settled && document.activeElement !== appInput && document.activeElement !== titleInput) commit();
+          }, 0);
+        });
+        inp.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') { inp.blur(); }
+          else if (e.key === 'Escape') { cancel(); }
+        });
+      });
+    }
+
+    show();
+    return wrap;
   }
 
   function moveStep(pos, delta) {
@@ -378,56 +528,70 @@ const editorJS = `
     return b;
   }
 
-  // buildAnnotationElement renders one EXISTING annotation as an
-  // always-interactive numbered marker: drag its body to move it, drag a
-  // corner handle to resize it (both committing via /api/annotation/update
-  // as soon as the drag ends — no separate Apply, since editing an
-  // annotation that already exists isn't destructive the way redaction
-  // is), edit the number badge directly, reorder it in the stack
-  // (front/back — array order is paint/z-order, so "front" moves an
-  // annotation later in step.annotations), or delete it. Positions are
-  // percentages of the image's natural size (see renderAnnotations for
-  // why); the drag/resize/commit math still converts through the
-  // rendered size, but only once a drag has actually started, by which
-  // point the element is necessarily attached and laid out (the user is
-  // looking at and dragging real on-screen pixels), so there's no
-  // placement-timing hazard there.
+  // Unpins every pinned annotation's toolbar on an outside click.
+  // Registered once at script scope (not per-annotation) so it never
+  // needs cleanup across the full annotation-layer rebuilds
+  // renderAnnotations() does on every add/delete/reorder — it just
+  // queries whatever's currently in the document each time it fires.
+  document.addEventListener('mousedown', function(e) {
+    document.querySelectorAll('.annotation.pinned').forEach(function(p) {
+      if (!p.contains(e.target)) p.classList.remove('pinned');
+    });
+  });
+
+  // buildAnnotationElement renders one EXISTING annotation as a plain
+  // highlighted rectangle with a small number badge by default — drag its
+  // body to move it, drag a corner handle to resize it (both committing
+  // via /api/annotation/update as soon as the drag ends — no separate
+  // Apply, since editing an annotation that already exists isn't
+  // destructive the way redaction is). All the other controls (renumber,
+  // reorder in the stack, delete) live in a floating toolbar above the
+  // annotation, shown only on hover or click — like a word processor's
+  // selection toolbar — rather than permanently overlapping the badge.
+  // Clicking the annotation body (a real click, not a drag) pins the
+  // toolbar open; clicking anywhere outside it un-pins (see the
+  // document-level listener above). Positions are percentages of the
+  // image's natural size (see renderAnnotations for why); the
+  // drag/resize/commit math still converts through the rendered size,
+  // but only once a drag has actually started, by which point the
+  // element is necessarily attached and laid out (the user is looking at
+  // and dragging real on-screen pixels), so there's no placement-timing
+  // hazard there.
   function buildAnnotationElement(img, ann, pos, step, onStackChanged) {
     var el = document.createElement('div');
     el.className = 'annotation';
 
     function place() {
+      var topPct = ann.y / img.naturalHeight;
       el.style.left = (ann.x / img.naturalWidth * 100) + '%';
-      el.style.top = (ann.y / img.naturalHeight * 100) + '%';
+      el.style.top = (topPct * 100) + '%';
       el.style.width = (ann.w / img.naturalWidth * 100) + '%';
       el.style.height = (ann.h / img.naturalHeight * 100) + '%';
+      // A toolbar floating above an annotation near the top of the image
+      // would be clipped off the frame — flip it below instead.
+      el.classList.toggle('toolbar-below', topPct < 0.08);
     }
     place();
 
-    var badge = document.createElement('input');
-    badge.type = 'number';
+    var badge = document.createElement('span');
     badge.className = 'annotation-badge';
-    badge.value = ann.number;
-    badge.addEventListener('click', function(e) { e.stopPropagation(); });
-    badge.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    badge.textContent = ann.number;
     el.appendChild(badge);
 
-    var del = document.createElement('button');
-    del.className = 'annotation-delete';
-    del.textContent = '×';
-    del.title = 'Delete this annotation';
-    del.addEventListener('mousedown', function(e) { e.stopPropagation(); });
-    del.addEventListener('click', function(e) {
-      e.stopPropagation();
-      api('POST', '/api/annotation/delete', {index: step.index, id: ann.id}).then(function() {
-        step.annotations = (step.annotations || []).filter(function(a) { return a.id !== ann.id; });
-        onStackChanged();
-      }).catch(function(e2) { alert('Delete failed: ' + e2.message); });
-    });
-    el.appendChild(del);
+    var toolbar = document.createElement('div');
+    toolbar.className = 'annotation-toolbar';
+    toolbar.addEventListener('mousedown', function(e) { e.stopPropagation(); });
 
-    var stackCtl = document.createElement('div');
-    stackCtl.className = 'annotation-stack';
+    var numberInput = document.createElement('input');
+    numberInput.type = 'number';
+    numberInput.value = ann.number;
+    numberInput.title = 'Renumber';
+    toolbar.appendChild(numberInput);
+
+    var sep1 = document.createElement('span');
+    sep1.className = 'toolbar-sep';
+    toolbar.appendChild(sep1);
+
     var backBtn = document.createElement('button');
     backBtn.textContent = '‹';
     backBtn.title = 'Send backward';
@@ -436,9 +600,21 @@ const editorJS = `
     frontBtn.textContent = '›';
     frontBtn.title = 'Bring forward';
     frontBtn.disabled = pos === (step.annotations || []).length - 1;
-    [backBtn, frontBtn].forEach(function(b) {
-      b.addEventListener('mousedown', function(e) { e.stopPropagation(); });
-    });
+    toolbar.appendChild(backBtn);
+    toolbar.appendChild(frontBtn);
+
+    var sep2 = document.createElement('span');
+    sep2.className = 'toolbar-sep';
+    toolbar.appendChild(sep2);
+
+    var delBtn = document.createElement('button');
+    delBtn.className = 'annotation-delete-btn';
+    delBtn.textContent = '×';
+    delBtn.title = 'Delete this annotation';
+    toolbar.appendChild(delBtn);
+
+    el.appendChild(toolbar);
+
     function moveInStack(delta) {
       var anns = step.annotations || [];
       var newPos = pos + delta;
@@ -454,11 +630,26 @@ const editorJS = `
         onStackChanged();
       }).catch(function(e) { alert('Reorder failed: ' + e.message); });
     }
-    backBtn.addEventListener('click', function(e) { e.stopPropagation(); moveInStack(-1); });
-    frontBtn.addEventListener('click', function(e) { e.stopPropagation(); moveInStack(1); });
-    stackCtl.appendChild(backBtn);
-    stackCtl.appendChild(frontBtn);
-    el.appendChild(stackCtl);
+    backBtn.addEventListener('click', function() { moveInStack(-1); });
+    frontBtn.addEventListener('click', function() { moveInStack(1); });
+
+    delBtn.addEventListener('click', function() {
+      api('POST', '/api/annotation/delete', {index: step.index, id: ann.id}).then(function() {
+        step.annotations = (step.annotations || []).filter(function(a) { return a.id !== ann.id; });
+        onStackChanged();
+      }).catch(function(e2) { alert('Delete failed: ' + e2.message); });
+    });
+
+    function commitNumber() {
+      var number = parseInt(numberInput.value, 10);
+      if (isNaN(number) || number === ann.number) { numberInput.value = ann.number; return; }
+      var prev = ann.number;
+      ann.number = number;
+      badge.textContent = number;
+      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h, number: number})
+        .catch(function(e) { alert('Renumber failed: ' + e.message); ann.number = prev; badge.textContent = prev; numberInput.value = prev; });
+    }
+    numberInput.addEventListener('change', commitNumber);
 
     var handles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
       var h = document.createElement('div');
@@ -469,30 +660,28 @@ const editorJS = `
       return {corner: corner, el: h};
     });
 
-    function commit() {
+    function commitPosition() {
       var sx = img.naturalWidth / img.clientWidth;
       var sy = img.naturalHeight / img.clientHeight;
       var x = el.offsetLeft * sx, y = el.offsetTop * sy;
       var w = el.offsetWidth * sx, h = el.offsetHeight * sy;
-      var number = parseInt(badge.value, 10);
-      if (isNaN(number)) number = ann.number;
-      ann.x = x; ann.y = y; ann.w = w; ann.h = h; ann.number = number;
-      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: number})
+      ann.x = x; ann.y = y; ann.w = w; ann.h = h;
+      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: ann.number})
         .catch(function(e) { alert('Update failed: ' + e.message); onStackChanged(); });
     }
 
     var dragging = null;
     el.addEventListener('mousedown', function(e) {
-      if (e.target !== el) return; // a child (badge/delete/stack/handle) handles its own mousedown
+      if (e.target !== el) return; // a child (badge/toolbar/handle) handles its own mousedown
       e.preventDefault();
-      dragging = {type: 'move', startX: e.clientX, startY: e.clientY, origLeft: el.offsetLeft, origTop: el.offsetTop};
+      dragging = {type: 'move', moved: false, startX: e.clientX, startY: e.clientY, origLeft: el.offsetLeft, origTop: el.offsetTop};
     });
     handles.forEach(function(h) {
       h.el.addEventListener('mousedown', function(e) {
         e.preventDefault();
         e.stopPropagation();
         dragging = {
-          type: 'resize', corner: h.corner, startX: e.clientX, startY: e.clientY,
+          type: 'resize', moved: true, corner: h.corner, startX: e.clientX, startY: e.clientY,
           origLeft: el.offsetLeft, origTop: el.offsetTop, origW: el.offsetWidth, origH: el.offsetHeight,
         };
       });
@@ -500,6 +689,7 @@ const editorJS = `
     window.addEventListener('mousemove', function(e) {
       if (!dragging) return;
       var dx = e.clientX - dragging.startX, dy = e.clientY - dragging.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragging.moved = true;
       if (dragging.type === 'move') {
         el.style.left = (dragging.origLeft + dx) + 'px';
         el.style.top = (dragging.origTop + dy) + 'px';
@@ -518,11 +708,17 @@ const editorJS = `
     });
     window.addEventListener('mouseup', function() {
       if (!dragging) return;
+      var wasPlainClick = dragging.type === 'move' && !dragging.moved;
       dragging = null;
-      commit();
+      if (wasPlainClick) {
+        // A click with no drag toggles the toolbar open/closed (pinned),
+        // same as clicking selected text in a word processor — no
+        // position actually changed, so there's nothing to commit.
+        el.classList.toggle('pinned');
+      } else {
+        commitPosition();
+      }
     });
-
-    badge.addEventListener('change', commit);
 
     return el;
   }

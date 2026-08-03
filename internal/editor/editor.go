@@ -9,8 +9,9 @@
 // UI handles [visual editing] far more easily than a TUI").
 //
 // Most mutations go through internal/session's edit functions
-// (ReorderSteps/SetStepHidden/EditNote/EditImage/AddAnnotation/
-// UpdateAnnotation/DeleteAnnotation/ReorderAnnotations), which reload
+// (ReorderSteps/SetStepHidden/EditNote/EditTitle/EditWindowInfo/
+// EditImage/AddAnnotation/UpdateAnnotation/DeleteAnnotation/
+// ReorderAnnotations), which reload
 // from disk, mutate, log to Session.EditLog, and save — this package
 // holds no *session* state itself beyond the name and directory, so it
 // can't drift from what's actually on disk between requests. It does
@@ -178,6 +179,37 @@ func NewHandler(name string) (http.Handler, error) {
 			return
 		}
 		if _, err := session.EditNote(name, body.Index, body.Note); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/title", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index int    `json:"index"`
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.EditTitle(name, body.Index, body.Title); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/window", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index       int    `json:"index"`
+			WindowApp   string `json:"window_app"`
+			WindowTitle string `json:"window_title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.EditWindowInfo(name, body.Index, body.WindowApp, body.WindowTitle); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

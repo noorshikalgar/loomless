@@ -49,7 +49,7 @@ func PDF(s *session.Session, dir string) ([]byte, error) {
 
 	for _, step := range steps {
 		pdf.SetFont("Helvetica", "B", 14)
-		pdf.MultiCell(0, 9, safe(fmt.Sprintf("Step %d", step.Index)), "", "L", false)
+		pdf.MultiCell(0, 9, safe(stepHeading(step)), "", "L", false)
 
 		if step.Command != "" {
 			renderTerminalStep(pdf, step)

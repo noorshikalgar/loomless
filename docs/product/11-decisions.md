@@ -923,6 +923,108 @@ a real physical click, for the same standing reason as decisions #15,
 `AddAnnotation` itself is exercised thoroughly above via the identical
 path the editor's "Draw Highlight" button uses.
 
+## 20. Annotation toolbar redesign, and editable step title/window info
+
+Decided 2026-08-03, same day as #19, from direct feedback on it: a
+screenshot showing decision #19's per-annotation controls — a red numbered
+badge, a "×" delete button, and "‹"/"›" stack buttons — all crammed into
+the same top-right corner of a small annotation, overlapping each other
+illegibly. Called out explicitly as "not proper," with a specific
+reference model: *"have a toolbar kind thing similar to font styles in
+word above the highlight not as a badge. once saved than we can show on
+click or hover show toolbar."*
+
+**Annotation UI** (`internal/editor/html.go`): the number badge is now a
+small static `<span>` (not an `<input>`) shown at all times as the only
+default-visible chrome — matching "once saved" from the request, an
+annotation at rest just looks like a highlighted, numbered rectangle. All
+interactive controls (renumber, send backward/bring forward, delete) moved
+into a `.annotation-toolbar` — a floating pill positioned above the
+annotation (or below, when the annotation sits near the top of the image
+and a toolbar above it would clip off the frame — `toolbar-below`,
+computed from the annotation's vertical position as a fraction of image
+height), shown via a pure-CSS `:hover` rule so revealing it costs no JS.
+Resize handles got the same treatment (`.annotation .resize-handle`
+hidden by default, shown on hover/pin) — matching "once saved" was really
+asking for a general at-rest-vs-editing distinction, not something
+specific to the toolbar alone.
+
+"Or click," per the request, is handled by a `pinned` CSS class: a plain
+click on an annotation's body (tracked the same way setupDrawing already
+distinguishes a drag from a click — a `moved` flag set once the pointer
+travels more than a few pixels) toggles `.pinned`, which the same
+`:hover`-style CSS rule also matches, so the toolbar stays open without
+requiring the mouse to stay put — useful once the user is actually about
+to type into the renumber field. A single `mousedown` listener registered
+once at script scope (not per-annotation) un-pins any annotation the
+click landed outside of; because it's stateless (queries
+`.annotation.pinned` fresh every time it fires) it needs no cleanup
+across `renderAnnotations()`'s full teardown-and-rebuild cycles, unlike a
+per-annotation listener would.
+
+One correctness fix fell out of tracking `moved` for the pin/click
+distinction: previously, ending a plain click on an annotation still
+called `commit()` and POSTed to `/api/annotation/update` even though
+nothing had actually changed (position math on a 0px drag still produces
+"new" coordinates equal to the old ones) — every click added a spurious,
+identical entry to the undo history. Now a plain click skips the network
+call entirely and only toggles `.pinned`; only an actual drag/resize
+calls `commitPosition()`.
+
+**Metadata editability**, from the same message (*"step change thing
+works but step 1 title is not editable. Everything should be editable
+step claude etc got it customization on full"*): the step heading (was
+hardcoded `'Step ' + step.index`) and the captured window app/title line
+(was static text) are now click-to-edit, the same interaction pattern as
+the annotation toolbar's reveal-on-interact philosophy — plain text at
+rest, an `<input>` in place of it on click, committing on blur/Enter,
+Escape to cancel without saving.
+
+- `session.Step` gained a `Title` field (empty means "no override, show
+  the default 'Step N' heading" — typing the default text back into the
+  editor, or clearing it, stores an empty string rather than the literal
+  default, so "Step 1" only ever means "unset" on disk, never a stored
+  string a future rename to "Step 2" would leave stale).
+- New `session.EditTitle` and `session.EditWindowInfo`, following
+  `EditNote`'s existing shape exactly (reload, mutate, mask free-text
+  fields the same way capture-time text already is, log old/new to
+  EditLog, save) — `EditWindowInfo` masks `WindowTitle` for the same
+  reason `AddStep` already does at capture time: a corrected window
+  title is still user-typed free text, just as capable of carrying a
+  pasted secret as an originally-captured one.
+- New `/api/title` and `/api/window` editor endpoints, and
+  `internal/export`'s three exporters now call a shared `stepHeading()`
+  helper (`step.Title` if set, else `"Step " + step.Index`) instead of
+  hardcoding the numbered heading — so a renamed step's title actually
+  shows up in the exported Markdown/PDF/Slides, not just the editor.
+
+**Verified:**
+
+1. `go build/vet/gofmt` clean, existing test suite still passing (no
+   behavior under test changed).
+2. Live re-verification in the same editor session used for decision
+   #19's checks: confirmed the annotation renders as just a highlighted
+   rectangle plus a small numbered badge with no overlapping controls at
+   rest; hovering revealed the toolbar cleanly positioned above it;
+   dispatching a real no-movement mousedown+mouseup on the annotation
+   body toggled `pinned` to `true` (checked via `classList.contains`,
+   not just visually) with the toolbar staying visible after moving the
+   mouse away; a click elsewhere on the page un-pinned it (`pinned` back
+   to `false`).
+3. Clicked the step heading, confirmed it became a pre-filled, selected
+   text input; retyped it and tabbed away; confirmed via `GET
+   /api/session` the new title persisted. Clicked the window line,
+   confirmed both app and title fields became independent inputs;
+   edited the app field and tabbed to the title field — confirmed via
+   the API that nothing had saved yet (proving the "still within the
+   pair" focus check works, not just committing on every blur); edited
+   the title field and clicked elsewhere on the page — confirmed both
+   fields committed together in one call. Ran `story export --format
+   md` and confirmed the rendered Markdown used the custom title as its
+   `##` heading and the edited app/title as the window line, while an
+   untouched step in the same session still fell back to its default
+   "Step N" heading correctly.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

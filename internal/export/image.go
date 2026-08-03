@@ -1,6 +1,7 @@
 package export
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,16 @@ import (
 	"github.com/noorshikalgar/story/internal/capture"
 	"github.com/noorshikalgar/story/internal/session"
 )
+
+// stepHeading returns a step's display title — the user-editable
+// override (session.Step.Title) if one is set, otherwise the default
+// "Step <Index>" every exporter used before titles were editable.
+func stepHeading(step session.Step) string {
+	if step.Title != "" {
+		return step.Title
+	}
+	return fmt.Sprintf("Step %d", step.Index)
+}
 
 // toCaptureAnnotations adapts session.Annotation to capture.Annotation —
 // two structurally-identical but distinct types, kept separate rather
