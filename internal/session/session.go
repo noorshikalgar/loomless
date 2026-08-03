@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/noorshikalgar/story/internal/mask"
 )
 
 // Step is one captured moment in a session: either a window/click capture
@@ -29,11 +31,17 @@ type Step struct {
 	// "story run -- <command>". Output is a possibly-truncated head/tail
 	// preview (see truncateOutput); OutputFile is the untruncated raw
 	// output, always saved regardless of size — see decision #6 in
-	// docs/product/11-decisions.md. Output is NOT secret-masked yet.
+	// docs/product/11-decisions.md.
 	Command    string `json:"command,omitempty"`
 	Output     string `json:"output,omitempty"`
 	OutputFile string `json:"output_file,omitempty"` // relative to session dir
 	ExitCode   *int   `json:"exit_code,omitempty"`
+
+	// Masked names the secret-masking rules (internal/mask) that fired on
+	// this step's text fields, if any — never the matched content itself.
+	// Applied unconditionally before anything in the step is written to
+	// disk, not something callers opt into. See docs/product/07-edge-cases.md.
+	Masked []string `json:"masked,omitempty"`
 }
 
 // Session is one recording: a named, ordered sequence of steps.
@@ -200,12 +208,19 @@ func AppendStep(name, note, windowApp, windowTitle string, image []byte) (Step, 
 // AddStep appends a step, writes the screenshot bytes (if any) alongside
 // it, and persists the updated session.
 func (s *Session) AddStep(dir, note, windowApp, windowTitle string, image []byte) (Step, error) {
+	var matched []string
+	note, m := mask.Text(note)
+	matched = mergeRules(matched, m)
+	windowTitle, m = mask.Text(windowTitle)
+	matched = mergeRules(matched, m)
+
 	step := Step{
 		Index:       len(s.Steps) + 1,
 		Timestamp:   time.Now(),
 		Note:        note,
 		WindowApp:   windowApp,
 		WindowTitle: windowTitle,
+		Masked:      matched,
 	}
 	if len(image) > 0 {
 		filename := fmt.Sprintf("step-%04d.png", step.Index)
@@ -242,30 +257,58 @@ func AppendTerminalStep(name, command string, output []byte, exitCode int) (Step
 	return s.AddTerminalStep(dir, command, output, exitCode)
 }
 
-// AddTerminalStep appends a terminal-capture step: the full output is
-// always written to outputs/step-NNNN.log, and a head/tail preview is
-// stored inline on the step for rendering. Output is not secret-masked —
-// see decision #6 in docs/product/11-decisions.md.
+// AddTerminalStep appends a terminal-capture step. Command and output are
+// secret-masked (internal/mask) before either the log file or session.json
+// is written — per docs/product/07-edge-cases.md, masking after the fact
+// is too late, the raw secret would already have touched disk. The full
+// (masked) output is always written to outputs/step-NNNN.log, and a
+// head/tail preview is stored inline on the step for rendering.
 func (s *Session) AddTerminalStep(dir, command string, output []byte, exitCode int) (Step, error) {
+	var matched []string
+	command, m := mask.Text(command)
+	matched = mergeRules(matched, m)
+	maskedOutput, m := mask.Text(string(output))
+	matched = mergeRules(matched, m)
+
 	step := Step{
 		Index:     len(s.Steps) + 1,
 		Timestamp: time.Now(),
 		Command:   command,
 		ExitCode:  &exitCode,
+		Masked:    matched,
 	}
 
 	filename := fmt.Sprintf("step-%04d.log", step.Index)
-	if err := os.WriteFile(filepath.Join(outputsDir(dir), filename), output, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outputsDir(dir), filename), []byte(maskedOutput), 0o644); err != nil {
 		return Step{}, fmt.Errorf("write command output: %w", err)
 	}
 	step.OutputFile = filepath.Join("outputs", filename)
-	step.Output = truncateOutput(string(output), terminalPreviewHeadLines, terminalPreviewTailLines)
+	step.Output = truncateOutput(maskedOutput, terminalPreviewHeadLines, terminalPreviewTailLines)
 
 	s.Steps = append(s.Steps, step)
 	if err := save(dir, s); err != nil {
 		return Step{}, err
 	}
 	return step, nil
+}
+
+// mergeRules appends rule names from src into dst, skipping ones already
+// present — a step can trigger the same rule across multiple fields (e.g.
+// a token in both the command and its output).
+func mergeRules(dst, src []string) []string {
+	for _, name := range src {
+		found := false
+		for _, existing := range dst {
+			if existing == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			dst = append(dst, name)
+		}
+	}
+	return dst
 }
 
 // truncateOutput keeps the first headLines and last tailLines of output,

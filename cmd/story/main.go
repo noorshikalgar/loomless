@@ -260,9 +260,12 @@ func runClickDaemon(args []string) error {
 				image = shot
 			}
 		}
-		if _, err := session.AppendStep(name, "", windowApp, windowTitle, image); err != nil {
+		step, err := session.AppendStep(name, "", windowApp, windowTitle, image)
+		if err != nil {
 			fmt.Println("append step failed:", err)
+			return
 		}
+		warnIfMasked(step)
 	}
 
 	fmt.Println("click-daemon: listening")
@@ -307,7 +310,16 @@ func cmdStep(args []string) error {
 		fmt.Printf(" (%s — %s)", windowApp, windowTitle)
 	}
 	fmt.Println()
+	warnIfMasked(step)
 	return nil
+}
+
+// warnIfMasked surfaces that secret-masking changed a step's text, without
+// ever printing the matched content itself — see internal/mask.
+func warnIfMasked(step session.Step) {
+	if len(step.Masked) > 0 {
+		fmt.Fprintf(os.Stderr, "story: masked possible secret(s) in step %d (%s)\n", step.Index, strings.Join(step.Masked, ", "))
+	}
 }
 
 // cmdRun implements "story run [--] <command> [args...]": the explicit,
@@ -352,6 +364,7 @@ func cmdRun(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "story: step %d captured (exit %d)\n", step.Index, exitCode)
+	warnIfMasked(step)
 
 	// Propagate the wrapped command's own exit code so "story run --
 	// make test && story record stop" chains the way a caller expects.

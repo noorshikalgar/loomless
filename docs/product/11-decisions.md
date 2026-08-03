@@ -91,12 +91,44 @@ Long output is truncated to a head/tail preview in the rendered story
 (per `07-edge-cases.md`); full raw output is always saved alongside the
 session so nothing is silently lost, just not inlined.
 
-**Known gap, not yet closed:** captured command output is **not**
-secret-masked yet (open question #5 / Phase 1 roadmap item, tracked
-separately) — anything a command prints to stdout/stderr, including
-secrets, lands on disk as-is for now. Masking is queued as the very next
-piece of work specifically because terminal capture needed to exist first
-for it to have real output to operate on.
+Secret-masking (decision #7, below) now runs on this path before anything
+is written to disk.
+
+## 7. Secret-masking — **pattern-based, text fields only, unconditional**
+
+Decided 2026-08-03 (resolves open question #5). `internal/mask` pattern-
+matches common secret shapes (AWS keys, `sk-`/`gh_`/`xox`-prefixed API
+tokens, JWTs, PEM private-key blocks, and `label=value`/`--flag value`
+style assignments) and replaces matches with `«masked»` before any text
+touches disk. Applied unconditionally inside `session.AddStep` /
+`AddTerminalStep` — not something a caller opts into — so every current
+and future capture path (manual step, click daemon, `story run`, and the
+Phase 1.5 MCP server later) gets it automatically. Covers: step notes,
+window titles, terminal commands, and terminal output.
+
+**Scope, deliberately narrow:** text only. Screenshot pixels are not
+scanned — per `07-edge-cases.md`, reliable secret detection in arbitrary
+pixel content needs OCR, which is real Phase 2 "auto-blur" scope, not a
+Phase 1 pattern-match. And masking only governs what Story *saves*: a
+command run via `story run` still prints its real, unmasked output live to
+your actual terminal exactly as it would without Story — masking can't
+and shouldn't suppress that, only what lands in `session.json` and the
+output log.
+
+Default aggressiveness leans toward **fewer false positives over catching
+everything** (the doc's stated trade-off, left undecided until now): an
+early version of the `label=value` rule also matched on bare whitespace
+(`password reset`, `a secret plan`) and flagged ordinary prose caught by
+the test suite — tightened to require an explicit `:`/`=` separator, plus
+a separate `--flag value` rule for CLI-style args, which are unambiguous
+without a separator. This will still miss real secrets in unrecognized
+shapes; per the edge-cases doc, that's expected — this is a safety net,
+not a guarantee, and the human/agent reviewing before sharing is still
+the real backstop.
+
+Each step records *which* rules fired (`Masked: []string`, rule names
+only, never matched content) — visible in the CLI output and in
+`session.json` — so masking is never silent.
 
 ## GitHub remote
 

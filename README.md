@@ -65,9 +65,14 @@ go build -o story ./cmd/story
 ./story export my-first-story
 ```
 
-`story run`'s captured output is **not secret-masked yet** — see decision
-#6 in [`docs/product/11-decisions.md`](docs/product/11-decisions.md).
-Don't run commands that print secrets during a recording until that lands.
+Notes, window titles, and `story run` commands/output are pattern-matched
+for common secret shapes (API keys, tokens, `password=...`-style
+assignments) and masked as `«masked»` before anything is written to disk —
+see decision #7 in
+[`docs/product/11-decisions.md`](docs/product/11-decisions.md). This is a
+safety net, not a guarantee: it won't catch every shape, and it doesn't
+hide anything from your *live* terminal — only from what gets saved.
+Review before sharing a story publicly.
 
 Output lands in `~/.story/sessions/my-first-story/`. First run prompts for
 **Accessibility** (to watch clicks and resolve window info) and **Screen
