@@ -68,6 +68,20 @@ var videoLinePattern = regexp.MustCompile(`^<?(\S+)>?$`)
 // structurally can't play a video, so the same line there just stays a
 // normal (Linkify-clickable, for PDF) link — degrading gracefully
 // rather than silently doing nothing with it.
+// RenderNotePreview renders a caption/content-step body's Markdown to
+// HTML for the editor's own live preview panel — exported specifically
+// for internal/editor to call (everything else in this file is
+// package-private). Reuses noteHTMLWithVideoEmbeds as-is: a preview
+// shown inside the still-running local editor server can reference a
+// content step's uploaded image by its ordinary relative path (the
+// editor already serves it at that exact URL via GET /images/{file}),
+// unlike the Slides exporter's noteHTMLWithVideoEmbeds call site, which
+// first runs inlineLocalImages because a self-contained EXPORTED .html
+// file won't have that server around to ask.
+func RenderNotePreview(note string) (string, error) {
+	return noteHTMLWithVideoEmbeds(note)
+}
+
 func noteHTMLWithVideoEmbeds(note string) (string, error) {
 	lines := strings.Split(note, "\n")
 	var out bytes.Buffer

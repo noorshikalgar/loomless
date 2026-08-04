@@ -2161,6 +2161,92 @@ DECISION happens once.
    from the output file for that step, proving the export path (not
    just the editor's own preview) honors the setting.
 
+## 32. Icon toolbar, a self-explanatory header-style control, and a live Markdown preview
+
+Decided 2026-08-04, from direct feedback on a screenshot of the just-
+shipped toolbar and header control: "improve this toolbar properly with
+icons," "improve this Header: Both what it means??? confused," and "for
+markdown can we have preview as well right there?" Three small, focused
+fixes rather than one redesign.
+
+**Icon toolbar.** The image editor's toolbar had grown to thirteen
+text-labeled buttons (decision #30 alone added five) — a wall of words
+rather than a toolbar. Every tool button now shows a small inline SVG
+icon instead (hand-drawn stroke/fill shapes, 24x24 viewBox, no icon
+library or CDN dependency — this project stays local-first, see
+decision #3), with the former label moved to `title`/`aria-label` so
+it's still there as a hover tooltip and still the accessible name for
+assistive tech, just not permanently taking up horizontal space.
+Apply/Cancel deliberately KEPT their text labels — they're rare,
+higher-stakes confirm/cancel actions (Apply commits a destructive
+redaction or replaces the crop), and an icon-only checkmark/X felt like
+the wrong place to trade a half-second of reading time for compactness.
+
+**Header-style control: a `<select>`, not a cycle button.** The single
+"Header: Both" button from decision #31 was accurate but genuinely
+unclear out of context — "Both" only means something once you already
+know what it's short for, and a cycling button hides the other three
+options entirely until you've clicked through them once. Replaced with
+a plain `<select>` listing all four choices by their own full label
+("Window: App + Title", "Window: App only", "Window: Title only",
+"Window: Hidden") — the options ARE the explanation, nothing left to
+intuit from a terse abbreviation. Kept in the same always-visible
+step-header spot (not the window-line's own edit mode) for the same
+"Hidden must never be a dead end" reasoning decision #31 already
+established.
+
+**Live Markdown preview, rendered server-side, not a second parser.**
+Every note-bearing textarea (captions and content steps alike) gets a
+"Preview" toggle; when on, a debounced (400ms after typing stops) call
+to a new `/api/render-preview` endpoint shows the actual rendered HTML
+below the textarea. The endpoint is a one-line wrapper
+(`export.RenderNotePreview`) around the exact same
+`noteHTMLWithVideoEmbeds` pipeline Slides export already uses — the
+deliberate alternative to writing a second Markdown-to-HTML converter
+in JavaScript. A hand-rolled JS parser would have been faster per
+keystroke (no network round trip) but would inevitably drift from the
+real Go/goldmark rendering over time as either side picked up an edge
+case the other didn't — video-embed detection and Linkify behavior
+included for free, correctly, by construction, since it's the same
+code path. Local image references (`![](content-....png)`) need no
+special handling here the way Slides export's `inlineLocalImages` does:
+the preview renders inside the still-running local editor server, so a
+plain relative image src resolves correctly against that server's own
+`/images/{file}` route — the data-URI inlining trick only exists for
+the self-contained, server-less *exported* Slides file.
+
+**Verified:**
+
+1. Unit tests: `internal/export` (`RenderNotePreview` confirmed to use
+   the video-embed-aware pipeline specifically, not a plain
+   `noteHTML` call, by checking for the same `<div class="video-embed">`
+   marker the Slides-export test already pins).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Live browser verification against a real session: confirmed every
+   icon button's accessible name (via the accessibility tree, not just
+   eyeballing) matches its former text label exactly. Clicked Preview,
+   typed bold/link/inline-code Markdown, and confirmed the panel
+   rendered real `<strong>`/`<a>`/`<code>` — then kept typing and
+   confirmed the debounced live-update picked up the change without
+   re-clicking Preview. Changed the header-style `<select>` and
+   confirmed via `GET /api/session` it persisted correctly. Clicked an
+   icon shape-tool button and confirmed the tool still armed/drew
+   correctly — this surfaced a real testing-environment quirk worth
+   recording: an early synthetic-`MouseEvent`-based check reported
+   `window.innerWidth === 0` inside the browser-automation tool's own
+   JS execution context, producing degenerate zero-size shapes, even
+   though a screenshot taken at the exact same moment showed the page
+   rendering completely normally — the tool's JS-eval context and its
+   actual rendering surface had briefly disagreed about viewport size.
+   Resolved by switching to the automation tool's real click-and-drag
+   action (driving actual screen coordinates, the same input path a
+   human's mouse would produce) rather than dispatching synthetic
+   events computed from that same unreliable in-page measurement,
+   which then produced a correctly-sized shape — a test-tooling
+   artifact, not a product bug, but one worth writing down since it's
+   the kind of false alarm that's easy to misdiagnose as a real
+   regression in the coordinate-scaling logic.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

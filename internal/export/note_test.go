@@ -13,6 +13,25 @@ import (
 	"github.com/go-pdf/fpdf"
 )
 
+// TestRenderNotePreviewMatchesVideoEmbedPipeline confirms the editor's
+// live-preview endpoint uses the exact same rendering path as Slides
+// export (noteHTMLWithVideoEmbeds) rather than a separate, potentially
+// diverging implementation — checked via the one behavior that's
+// distinctive to that specific pipeline (bare video URLs becoming a
+// real iframe embed, not just a Linkify'd <a>).
+func TestRenderNotePreviewMatchesVideoEmbedPipeline(t *testing.T) {
+	got, err := RenderNotePreview("before\n\nhttps://youtu.be/dQw4w9WgXcQ\n\nafter")
+	if err != nil {
+		t.Fatalf("RenderNotePreview: %v", err)
+	}
+	if !strings.Contains(got, `<div class="video-embed">`) {
+		t.Errorf("RenderNotePreview(%q) = %q, want a video-embed div (same pipeline as Slides export)", "...", got)
+	}
+	if !strings.Contains(got, "before") || !strings.Contains(got, "after") {
+		t.Errorf("RenderNotePreview(...) = %q, want surrounding text preserved", got)
+	}
+}
+
 func TestNoteHTMLRendersBasicMarkdown(t *testing.T) {
 	cases := []struct {
 		name string

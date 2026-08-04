@@ -32,6 +32,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/noorshikalgar/story/internal/export"
 	"github.com/noorshikalgar/story/internal/session"
 )
 
@@ -189,6 +190,32 @@ func NewHandler(name string) (http.Handler, error) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+	// /api/render-preview renders Markdown to HTML for the editor's own
+	// live preview panel — a real network round-trip per keystroke
+	// (debounced client-side) rather than a second, hand-rolled JS
+	// Markdown parser, so the preview can never drift from what the
+	// actual exporters (which share this exact rendering path) produce.
+	// Stateless: doesn't touch or even need to know which step this
+	// text belongs to, since it's not persisted here at all — Save
+	// still goes through /api/caption separately.
+	mux.HandleFunc("POST /api/render-preview", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		rendered, err := export.RenderNotePreview(body.Text)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			HTML string `json:"html"`
+		}{rendered})
 	})
 	mux.HandleFunc("POST /api/title", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

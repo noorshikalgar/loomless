@@ -36,12 +36,31 @@ const editorCSS = `
   .step-header button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
   .step-header button:hover { background: #3a3a42; }
   .step-header button:disabled { opacity: 0.3; cursor: default; }
+  .step-header select.header-style-select { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.5rem; cursor: pointer; font-size: 0.8rem; font-family: inherit; }
+  .step-header select.header-style-select:hover { background: #3a3a42; }
   textarea { width: 100%; min-height: 3rem; background: #17171a; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.5rem; font-family: inherit; font-size: 0.95rem; resize: vertical; }
   .save-row { display: flex; justify-content: flex-end; margin-top: 0.4rem; gap: 0.5rem; align-items: center; }
   .save-row button { background: #2a5a3a; color: #f0f0f0; border: 1px solid #3a7a4a; border-radius: 4px; padding: 0.4rem 0.9rem; cursor: pointer; }
   .save-row button:hover { background: #366e46; }
+  .save-row button.active { background: #2a4a6a; border-color: #3c6ca0; }
   .saved-hint { color: #7ee787; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; }
   .saved-hint.show { opacity: 1; }
+  /* Markdown preview panel (decision #32) — same dark card look as the
+     rest of the editor, deliberately styled close to Slides export's
+     own .note rules so what you see here is a reasonable preview of
+     what the actual export will look like, not just "some rendered
+     HTML." */
+  .md-preview { margin-top: 0.5rem; padding: 0.75rem 1rem; background: #17171a; border: 1px solid #333; border-radius: 4px; font-size: 0.95rem; }
+  .md-preview p { margin: 0 0 0.6em; }
+  .md-preview p:last-child { margin-bottom: 0; }
+  .md-preview code { background: #26262b; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.92em; }
+  .md-preview a { color: #8ab4ff; }
+  .md-preview ul, .md-preview ol { margin: 0 0 0.6em; padding-left: 1.4em; }
+  .md-preview img { margin: 0.4em 0; }
+  .md-preview h1, .md-preview h2, .md-preview h3 { margin: 0.6em 0 0.4em; color: #8ab4ff; }
+  .md-preview-empty { color: #777; font-style: italic; margin: 0; }
+  .md-preview .video-embed { position: relative; width: 100%; max-width: 480px; margin: 0.6em 0; padding-top: 56.25%; }
+  .md-preview .video-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 6px; }
   img { max-width: 100%; border-radius: 4px; display: block; }
   pre { background: #17171a; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; margin: 0.4rem 0; }
   pre.cmd { color: #7ee787; }
@@ -49,6 +68,12 @@ const editorCSS = `
   .img-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
   .img-toolbar button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; }
   .img-toolbar button:disabled { opacity: 0.35; cursor: default; }
+  /* Icon-only tool buttons (decision #32) — a fixed square so the
+     toolbar reads as one tidy row of controls rather than the ragged
+     width text labels produced, with the accessible name/tooltip
+     living entirely in title/aria-label since there's no visible text. */
+  .img-toolbar button.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 2.1rem; height: 2.1rem; padding: 0; }
+  .img-toolbar button.icon-btn svg { display: block; }
   .img-toolbar button.armed.redact-btn { background: #7a2a2a; border-color: #a03c3c; }
   .img-toolbar button.armed.crop-btn { background: #1a5a2e; border-color: #2c7c44; }
   /* All five shape tools (rect/circle/line/arrow/freehand) share one
@@ -356,6 +381,9 @@ const editorJS = `
         if (step.is_content) ta.placeholder = 'Write something in Markdown — headings, lists, links, images, a pasted YouTube/Vimeo link on its own line…';
         el.appendChild(ta);
 
+        var mdPreview = buildMarkdownPreview(ta);
+        el.appendChild(mdPreview.panel);
+
         var row = document.createElement('div');
         row.className = 'save-row';
         var savedHint = document.createElement('span');
@@ -369,6 +397,7 @@ const editorJS = `
             setTimeout(function() { savedHint.classList.remove('show'); }, 1500);
           }).catch(function(e) { alert('Save failed: ' + e.message); });
         };
+        row.appendChild(mdPreview.toggleBtn);
         row.appendChild(buildInsertImageControl(ta));
         row.appendChild(savedHint);
         row.appendChild(saveBtn);
@@ -391,6 +420,53 @@ const editorJS = `
   // endpoint rather than reusing the capture-time AddStep path (see
   // InsertContentStep's own doc comment). position is this control's
   // index into fullOrder(), i.e. exactly where the new step should land.
+  // buildMarkdownPreview renders a "Preview" toggle plus a hidden-by-
+  // default panel showing ta's current value rendered as real HTML —
+  // via a debounced round-trip to /api/render-preview rather than a
+  // second, hand-rolled Markdown parser in JS. That endpoint shares the
+  // exact goldmark pipeline the actual exporters use, so what's shown
+  // here can't quietly drift from what a real export produces the way
+  // an independent JS implementation eventually would. Off by default:
+  // most captions are short and plain, so a permanently-open preview
+  // pane would mostly just be empty space; it's one click away exactly
+  // when a caption is long/rich enough that seeing it rendered helps.
+  function buildMarkdownPreview(ta) {
+    var panel = document.createElement('div');
+    panel.className = 'md-preview';
+    panel.style.display = 'none';
+
+    var toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.textContent = 'Preview';
+
+    var visible = false;
+    var debounceTimer = null;
+
+    function renderNow() {
+      apiJSON('POST', '/api/render-preview', {text: ta.value}).then(function(res) {
+        panel.innerHTML = res.html || '<p class="md-preview-empty">Nothing to preview yet.</p>';
+      }).catch(function(e) {
+        panel.innerHTML = '<p class="exit">Preview failed: ' + (e.message || 'unknown error') + '</p>';
+      });
+    }
+
+    toggleBtn.addEventListener('click', function() {
+      visible = !visible;
+      panel.style.display = visible ? 'block' : 'none';
+      toggleBtn.classList.toggle('active', visible);
+      toggleBtn.textContent = visible ? 'Hide Preview' : 'Preview';
+      if (visible) renderNow();
+    });
+
+    ta.addEventListener('input', function() {
+      if (!visible) return;
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(renderNow, 400);
+    });
+
+    return {panel: panel, toggleBtn: toggleBtn};
+  }
+
   function buildInsertControl(position) {
     var wrap = document.createElement('div');
     wrap.className = 'insert-step-row';
@@ -527,20 +603,39 @@ const editorJS = `
   // sitting right there to cycle back. It only ever changes which
   // parts of WindowApp/WindowTitle are DISPLAYED — never the captured
   // values themselves, which stay fully intact underneath every style.
+  // buildHeaderStyleButton renders a plain <select> (decision #32) —
+  // NOT a cycle button — so the four choices are all visible and
+  // self-explanatory at once ("Show app + title", not a bare "Both"
+  // that only makes sense once you already know what it's short for).
+  // Still lives in the always-visible step-header row, not inside the
+  // window-line's own edit mode, for the same reason a cycle button
+  // did: "Hidden" must never be a dead end with no way back.
   function buildHeaderStyleButton(step) {
-    var STYLES = ['', 'app', 'title', 'hidden'];
-    var LABELS = {'': 'Header: Both', app: 'Header: App', title: 'Header: Title', hidden: 'Header: Hidden'};
-    var btn = document.createElement('button');
-    btn.textContent = LABELS[step.header_style || ''];
-    btn.title = 'Cycle which parts of the captured window info this step shows';
-    btn.addEventListener('click', function() {
-      var next = STYLES[(STYLES.indexOf(step.header_style || '') + 1) % STYLES.length];
+    var OPTIONS = [
+      {value: '', label: 'Window: App + Title'},
+      {value: 'app', label: 'Window: App only'},
+      {value: 'title', label: 'Window: Title only'},
+      {value: 'hidden', label: 'Window: Hidden'},
+    ];
+    var select = document.createElement('select');
+    select.className = 'header-style-select';
+    select.title = 'Which parts of this step\'s captured window info to show';
+    OPTIONS.forEach(function(opt) {
+      var el = document.createElement('option');
+      el.value = opt.value;
+      el.textContent = opt.label;
+      select.appendChild(el);
+    });
+    select.value = step.header_style || '';
+    select.addEventListener('change', function() {
+      var next = select.value;
+      var prev = step.header_style || '';
       api('POST', '/api/header-style', {index: step.index, style: next}).then(function() {
         step.header_style = next;
         render();
-      }).catch(function(e) { alert('Change failed: ' + e.message); });
+      }).catch(function(e) { alert('Change failed: ' + e.message); select.value = prev; });
     });
-    return btn;
+    return select;
   }
 
   // buildWindowLine renders the captured app/window-title line the same
@@ -688,9 +783,9 @@ const editorJS = `
 
     var toolbar = document.createElement('div');
     toolbar.className = 'img-toolbar';
-    var redactBtn = mkPlainBtn('Draw Redaction', 'redact-btn');
-    var solidBtn = mkPlainBtn('Solid', 'style-selected');
-    var blurBtn = mkPlainBtn('Blur');
+    var redactBtn = mkIconBtn('redact', 'Draw Redaction', 'redact-btn');
+    var solidBtn = mkIconBtn('solid', 'Solid fill', 'style-selected');
+    var blurBtn = mkIconBtn('blur', 'Blur');
     var sepShapes = document.createElement('span');
     sepShapes.className = 'sep';
     // The five shape tools (decision #30) — a persistent palette, not
@@ -702,22 +797,22 @@ const editorJS = `
     // Every shape starts with NO numbered badge — annotating one is an
     // explicit, later choice made from its own hover toolbar (see
     // buildAnnotationElement's annotateBtn), never automatic.
-    var rectBtn = mkPlainBtn('Rectangle', 'shape-btn');
-    var circleBtn = mkPlainBtn('Circle', 'shape-btn');
-    var lineBtn = mkPlainBtn('Line', 'shape-btn');
-    var arrowBtn = mkPlainBtn('Arrow', 'shape-btn');
-    var freehandBtn = mkPlainBtn('Pen', 'shape-btn');
-    var cropBtn = mkPlainBtn('Draw Crop', 'crop-btn');
-    var clearCropBtn = mkPlainBtn('Clear Crop');
+    var rectBtn = mkIconBtn('rect', 'Rectangle', 'shape-btn');
+    var circleBtn = mkIconBtn('circle', 'Circle', 'shape-btn');
+    var lineBtn = mkIconBtn('line', 'Line', 'shape-btn');
+    var arrowBtn = mkIconBtn('arrow', 'Arrow', 'shape-btn');
+    var freehandBtn = mkIconBtn('pen', 'Pen (freehand)', 'shape-btn');
+    var cropBtn = mkIconBtn('crop', 'Draw Crop', 'crop-btn');
+    var clearCropBtn = mkIconBtn('clearCrop', 'Clear Crop');
     var sep1 = document.createElement('span');
     sep1.className = 'sep';
     var applyBtn = mkPlainBtn('Apply', 'apply-btn');
     var cancelBtn = mkPlainBtn('Cancel');
     var sep2 = document.createElement('span');
     sep2.className = 'sep';
-    var undoBtn = mkPlainBtn('Undo');
-    var redoBtn = mkPlainBtn('Redo');
-    var resetBtn = mkPlainBtn('Reset');
+    var undoBtn = mkIconBtn('undo', 'Undo');
+    var redoBtn = mkIconBtn('redo', 'Redo');
+    var resetBtn = mkIconBtn('reset', 'Reset (discard all edits)');
     var modeHint = document.createElement('span');
     modeHint.className = 'mode-hint';
     [redactBtn, solidBtn, blurBtn, sepShapes, rectBtn, circleBtn, lineBtn, arrowBtn, freehandBtn, cropBtn, clearCropBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
@@ -912,6 +1007,44 @@ const editorJS = `
     var b = document.createElement('button');
     b.textContent = label;
     if (cls) b.className = cls;
+    return b;
+  }
+
+  // TOOL_ICONS holds one simple stroke/fill SVG body per image-editor
+  // toolbar button (24x24 viewBox, "currentColor" so armed/hover
+  // styling — which recolors the button's own text color — recolors the
+  // icon along with it, no separate icon-color CSS needed). Kept as
+  // plain markup strings rather than <template> elements or a sprite
+  // sheet: there's no icon library dependency to add (this project
+  // stays local-first, no CDN — see decision #3), and a dozen small,
+  // hand-drawn outline icons is a small, one-time cost.
+  var TOOL_ICONS = {
+    redact: '<rect x="3" y="8" width="18" height="8" rx="1.5" fill="currentColor"/>',
+    solid: '<rect x="5" y="5" width="14" height="14" rx="1" fill="currentColor"/>',
+    blur: '<rect x="5" y="5" width="14" height="14" rx="1" fill="currentColor" opacity="0.35"/><rect x="5" y="5" width="14" height="14" rx="1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"/>',
+    rect: '<rect x="4" y="6" width="16" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+    circle: '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+    line: '<line x1="5" y1="19" x2="19" y2="5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    arrow: '<line x1="5" y1="19" x2="17" y2="7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polyline points="9,7 17,7 17,15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    pen: '<path d="M4 16c1.5-4 3 4 5 0s3 4 5 0 3-4 5-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    crop: '<path d="M6 2v14a2 2 0 002 2h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 22V8a2 2 0 00-2-2H2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    clearCrop: '<path d="M3 9V3h6M15 3h6v6M21 15v6h-6M9 21H3v-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    undo: '<path d="M9 14L4 9l5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h11a5 5 0 010 10h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    redo: '<path d="M15 14l5-5-5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9H9a5 5 0 000 10h3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    reset: '<path d="M4 6h16M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2m3 0v13a2 2 0 01-2 2H8a2 2 0 01-2-2V6h12z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  };
+
+  // mkIconBtn builds an icon-only toolbar button — the icon is purely
+  // decorative (aria-hidden), so the accessible name comes from the
+  // button's own title/aria-label, which doubles as the hover tooltip
+  // every icon-only control needs for discoverability.
+  function mkIconBtn(iconKey, label, cls) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'icon-btn' + (cls ? ' ' + cls : '');
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">' + TOOL_ICONS[iconKey] + '</svg>';
     return b;
   }
 
