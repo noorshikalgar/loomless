@@ -1473,6 +1473,113 @@ that's easy to get subtly wrong:
    screenshot being inspected, not by trusting "it's red, that must be
    my bug."
 
+## 26. Image cropping — non-destructive, presentation-time, in the unified history
+
+Decided 2026-08-04, next in the deferred list from decision #19 (crop was
+explicitly named there). Chosen deliberately over the alternatives with
+a specific persona in mind, per the standing instruction to think about
+how a feature actually gets used by developers and QA before building
+it: a bug-report or PR-walkthrough screenshot is almost always noisier
+than the thing it's actually about — other apps in the background, a
+notification banner, unrelated sidebar chrome — and cropping that away
+is a direct legibility win for whoever reads the story afterward. It's
+also a quiet security assist secret-masking can't touch: masking
+(`internal/mask`) only ever sees *text* fields, never screenshot pixels,
+so a Slack notification with someone else's message, or a different
+app's window peeking into frame, is exactly the kind of thing a crop
+catches that the masking pipeline structurally can't.
+
+**Non-destructive, like annotations, unlike redaction.** `session.Step`
+gained `Crop *CropRect` (nil = uncropped — every step before this field
+existed, and every step nobody has cropped). The stored screenshot's
+pixels are never trimmed; a crop is a stored rectangle applied fresh at
+export/flatten time (`internal/export`), same as annotations. This was
+the one real design decision worth deliberating rather than defaulting
+to "just crop the file": redaction is destructive *on purpose*, because
+the whole point is that covered content is actually gone — but cropping
+is a framing choice, not a security one, and nothing about it needs that
+guarantee. Non-destructive means adjustable-forever without penalty,
+which matters a lot in practice: a crop drawn slightly too tight is a
+common mistake, and there's no reason "redo it" should mean "redraw from
+scratch" when the original pixels were never lost in the first place.
+
+**Crop happens before annotations at export time, with annotation
+coordinates rebased to match.** An annotation is stored in the
+*original* image's pixel space (it has to be — the editor's own overlay
+always shows the full uncropped image, crop or no crop, so annotation
+positions must stay meaningful independent of whatever crop is or isn't
+set). `stepImageBytes` crops first, then shifts every annotation's (x,y)
+by subtracting the crop's own origin, then renders — and deliberately
+does *no* explicit filtering of annotations that land outside the newly
+cropped canvas: `RenderAnnotations`' drawing primitives already clip to
+the target image's bounds pixel-by-pixel (the same bounds-checking
+`Redact`'s solid fill already relied on), so an annotation shifted
+off-canvas just doesn't draw anything, correctly, by construction,
+without needing a second piece of logic to get right.
+
+**Joins the same unified undo/redo/reset history as everything else**
+(decision #19), not a parallel mechanism — `editSnapshot` gained a `Crop
+*session.CropRect` field alongside `Image`/`Annotations`, and the
+low-level restore primitive (`SetAnnotations`, previously
+annotations-only) was renamed to `SetStepPresentation` and extended to
+restore both fields atomically. This was a deliberate refusal to build
+crop's own separate history "just this once" — the entire point of the
+decision #19 rebuild was that a single Undo walks true chronological
+order across every kind of edit to a step, and a crop-specific
+undo/redo would have quietly reintroduced the exact fragmentation that
+rebuild existed to eliminate.
+
+**Editor UI**: a third "Draw Crop" toolbar button sharing the *exact*
+same draw → adjust → Apply flow redaction and highlights already use
+(`setupDrawing` gained a third mode rather than a parallel
+implementation). Once applied, the crop boundary renders as a dashed
+outline plus four bands darkening everything *outside* the kept region
+— deliberately four separate absolutely-positioned divs, not a single
+`overflow:hidden` + giant `box-shadow` trick (the more common way to do
+this), because `.img-frame` can't safely clip overflow: a resize handle
+on an annotation near the image's edge is drawn a few px outside the
+annotation's own box on purpose, and clipping the frame would cut those
+off. A "Clear Crop" button (disabled when there's no crop) removes it.
+
+**Verified:**
+
+1. Unit tests: `internal/capture` (`Crop` returns exactly the requested
+   region — checked against a four-quadrant test image so a wrong
+   region is unambiguous, not just "some pixels changed"; clamps a
+   rectangle that extends past an edge instead of erroring or padding;
+   rejects a rectangle entirely outside the image). `internal/export`
+   (crop applied before annotations with coordinates correctly
+   rebased — checked by placing an annotation exactly at the crop's own
+   origin and confirming it lands at (0,0) in the cropped output, not
+   its original coordinates; crop with zero annotations still produces
+   the right size; no crop and no annotations returns the original
+   bytes completely unchanged, byte-for-byte; `shiftAnnotationsForCrop`
+   doesn't mutate the caller's slice — the session's live in-memory
+   annotation data must stay in original-image coordinates for the
+   editor's own overlay to keep working; `stepImagePath` produces a
+   flattened copy for a crop-only step with zero annotations, which the
+   size check alone wouldn't have caught if the "has anything to
+   flatten" condition had been left checking annotations only).
+   `internal/session` (`SetCrop`/`ClearCrop` persist and reload
+   correctly; `SetCrop` rejects non-positive dimensions; clearing an
+   already-clear crop is a no-op, not an error).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Live browser verification against a real session: drew a crop via
+   the actual UI (armed the button, dragged, Apply), confirmed the
+   dashed-boundary-plus-dark-mask rendered exactly where drawn and
+   "Clear Crop" became enabled; confirmed the rectangle persisted via
+   `GET /api/session` (caught, in the process, the same "which step am
+   I actually looking at" display-order mix-up as decision #22's
+   verification — resolved the same way, by checking the response
+   payload's own `index` field rather than assuming); clicked the real
+   Undo button (not a raw API call — the point was verifying the live
+   DOM update path, not just the backend) and confirmed the mask
+   disappeared and "Clear Crop" re-disabled; Redo brought it back;
+   exported to PDF and visually confirmed the actual embedded screenshot
+   is genuinely cropped — no menu bar, no sidebar, no traffic-light
+   dots that were plainly visible in the original — while a different,
+   uncropped step's screenshot in the same document was untouched.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

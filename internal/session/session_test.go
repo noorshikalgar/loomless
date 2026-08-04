@@ -239,6 +239,75 @@ func TestRenameFollowsCurrentPointer(t *testing.T) {
 	}
 }
 
+func TestSetCropAndClearCrop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if _, _, err := Create("cropme"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("cropme", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+
+	s, err := SetCrop("cropme", step.Index, 10, 20, 100, 50)
+	if err != nil {
+		t.Fatalf("SetCrop: %v", err)
+	}
+	got := s.Steps[0].Crop
+	if got == nil || got.X != 10 || got.Y != 20 || got.W != 100 || got.H != 50 {
+		t.Fatalf("SetCrop result Crop = %+v, want {10 20 100 50}", got)
+	}
+
+	// Reload from disk to confirm it actually persisted, not just held
+	// in the returned in-memory Session.
+	reloaded, _, err := Load("cropme")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if reloaded.Steps[0].Crop == nil || *reloaded.Steps[0].Crop != *got {
+		t.Errorf("reloaded Crop = %+v, want %+v", reloaded.Steps[0].Crop, got)
+	}
+
+	s, err = ClearCrop("cropme", step.Index)
+	if err != nil {
+		t.Fatalf("ClearCrop: %v", err)
+	}
+	if s.Steps[0].Crop != nil {
+		t.Errorf("after ClearCrop, Crop = %+v, want nil", s.Steps[0].Crop)
+	}
+}
+
+func TestSetCropRejectsNonPositiveSize(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("badcrop"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("badcrop", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	if _, err := SetCrop("badcrop", step.Index, 0, 0, 0, 50); err == nil {
+		t.Error("SetCrop with zero width succeeded, want an error")
+	}
+}
+
+// TestClearCropOnUncroppedStepIsANoOp confirms clearing a crop that was
+// never set isn't treated as a mistake worth rejecting.
+func TestClearCropOnUncroppedStepIsANoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("nocrop"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("nocrop", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	if _, err := ClearCrop("nocrop", step.Index); err != nil {
+		t.Errorf("ClearCrop on a step with no crop: %v, want no error", err)
+	}
+}
+
 func TestVisibleSteps(t *testing.T) {
 	base := func() Session {
 		return Session{

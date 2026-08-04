@@ -6,16 +6,18 @@ import (
 	"github.com/noorshikalgar/story/internal/session"
 )
 
-// editSnapshot captures a step's full editable surface — image bytes and
-// annotation list together — as one unit. Redaction and annotation edits
-// used to have two disconnected undo mechanisms (image-only undo/redo,
-// and no history at all for annotations); snapshotting both together
-// means a single Undo/Redo/Reset walks the true chronological order of
-// everything the user did to a step, regardless of which kind of edit it
-// was.
+// editSnapshot captures a step's full editable surface — image bytes,
+// annotation list, and crop rectangle together — as one unit. Redaction
+// and annotation edits used to have two disconnected undo mechanisms
+// (image-only undo/redo, and no history at all for annotations);
+// snapshotting everything together means a single Undo/Redo/Reset walks
+// the true chronological order of everything the user did to a step,
+// regardless of which kind of edit it was — crop joins the same
+// snapshot rather than getting its own tracking, for the same reason.
 type editSnapshot struct {
 	Image       []byte
 	Annotations []session.Annotation
+	Crop        *session.CropRect
 }
 
 // cloneAnnotations copies the slice (session.Annotation has no reference
@@ -23,6 +25,17 @@ type editSnapshot struct {
 // mutated by later in-place edits to the live step's slice.
 func cloneAnnotations(anns []session.Annotation) []session.Annotation {
 	return append([]session.Annotation(nil), anns...)
+}
+
+// cloneCrop copies the pointed-to CropRect (nil stays nil) so a snapshot
+// holds its own value rather than aliasing whatever the live step's Crop
+// pointer happens to point at.
+func cloneCrop(c *session.CropRect) *session.CropRect {
+	if c == nil {
+		return nil
+	}
+	copy := *c
+	return &copy
 }
 
 // editHistory is in-memory, per-step undo/redo/reset state scoped to one

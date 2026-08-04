@@ -44,6 +44,7 @@ const editorCSS = `
   .img-toolbar button:disabled { opacity: 0.35; cursor: default; }
   .img-toolbar button.armed.redact-btn { background: #7a2a2a; border-color: #a03c3c; }
   .img-toolbar button.armed.highlight-btn { background: #7a5a1a; border-color: #a07c2c; }
+  .img-toolbar button.armed.crop-btn { background: #1a5a2e; border-color: #2c7c44; }
   .img-toolbar button.apply-btn { background: #2a5a3a; border-color: #3a7a4a; }
   .img-toolbar button.style-selected { background: #2a4a6a; border-color: #3c6ca0; }
   .img-toolbar .sep { width: 1px; height: 1.2rem; background: #444; margin: 0 0.2rem; }
@@ -58,6 +59,16 @@ const editorCSS = `
   .drag-overlay { position: absolute; display: none; pointer-events: auto; border: 2px dashed #fff; box-sizing: border-box; cursor: move; }
   .drag-overlay.redact { border-color: #ff5a5a; background: rgba(255, 0, 0, 0.15); }
   .drag-overlay.highlight { border-color: #ffb020; background: rgba(255, 176, 32, 0.15); }
+  .drag-overlay.crop { border-color: #7ee787; background: rgba(126, 231, 135, 0.1); }
+  /* The saved crop boundary (once Applied, not the in-progress
+     drag-overlay above) — a dashed line plus four opaque bands covering
+     everything OUTSIDE the kept region, so it's immediately obvious what
+     will and won't survive export. Four separate divs rather than one
+     overflow:hidden box-shadow trick, since .img-frame can't safely clip
+     overflow — a resize handle on an annotation near the image's edge
+     deliberately sits a few px outside the annotation's own box. */
+  .crop-mask { position: absolute; display: none; background: rgba(0, 0, 0, 0.65); pointer-events: none; z-index: 2; }
+  .crop-boundary { position: absolute; display: none; border: 2px dashed #7ee787; box-sizing: border-box; pointer-events: none; z-index: 3; }
   .resize-handle { position: absolute; width: 10px; height: 10px; margin: -5px; background: #fff; border: 1px solid #333; border-radius: 2px; z-index: 2; }
   .handle-nw, .handle-se { cursor: nwse-resize; }
   .handle-ne, .handle-sw { cursor: nesw-resize; }
@@ -448,6 +459,8 @@ const editorJS = `
     var solidBtn = mkPlainBtn('Solid', 'style-selected');
     var blurBtn = mkPlainBtn('Blur');
     var highlightBtn = mkPlainBtn('Draw Highlight', 'highlight-btn');
+    var cropBtn = mkPlainBtn('Draw Crop', 'crop-btn');
+    var clearCropBtn = mkPlainBtn('Clear Crop');
     var sep1 = document.createElement('span');
     sep1.className = 'sep';
     var applyBtn = mkPlainBtn('Apply', 'apply-btn');
@@ -459,7 +472,7 @@ const editorJS = `
     var resetBtn = mkPlainBtn('Reset');
     var modeHint = document.createElement('span');
     modeHint.className = 'mode-hint';
-    [redactBtn, solidBtn, blurBtn, highlightBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
+    [redactBtn, solidBtn, blurBtn, highlightBtn, cropBtn, clearCropBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
       .forEach(function(elm) { toolbar.appendChild(elm); });
     imgWrap.appendChild(toolbar);
 
@@ -492,6 +505,60 @@ const editorJS = `
       return {corner: corner, el: h};
     });
 
+    // The saved crop boundary, if any: a dashed outline plus four bands
+    // covering everything outside it. Built once and just toggled/
+    // repositioned on every renderCrop() call, unlike annotations (which
+    // rebuild from scratch each time) — there's at most one crop, so
+    // there's no list-churn to simplify by throwing the DOM away.
+    var cropTop = document.createElement('div');
+    cropTop.className = 'crop-mask';
+    var cropBottom = document.createElement('div');
+    cropBottom.className = 'crop-mask';
+    var cropLeft = document.createElement('div');
+    cropLeft.className = 'crop-mask';
+    var cropRight = document.createElement('div');
+    cropRight.className = 'crop-mask';
+    var cropBoundary = document.createElement('div');
+    cropBoundary.className = 'crop-boundary';
+    [cropTop, cropBottom, cropLeft, cropRight, cropBoundary].forEach(function(el) { imgFrame.appendChild(el); });
+
+    function renderCrop() {
+      var crop = step.crop;
+      clearCropBtn.disabled = !crop;
+      if (!crop) {
+        [cropTop, cropBottom, cropLeft, cropRight, cropBoundary].forEach(function(el) { el.style.display = 'none'; });
+        return;
+      }
+      var leftPct = crop.x / img.naturalWidth * 100;
+      var topPct = crop.y / img.naturalHeight * 100;
+      var wPct = crop.w / img.naturalWidth * 100;
+      var hPct = crop.h / img.naturalHeight * 100;
+      var rightPct = leftPct + wPct;
+      var bottomPct = topPct + hPct;
+
+      cropBoundary.style.display = 'block';
+      cropBoundary.style.left = leftPct + '%';
+      cropBoundary.style.top = topPct + '%';
+      cropBoundary.style.width = wPct + '%';
+      cropBoundary.style.height = hPct + '%';
+
+      cropTop.style.display = 'block';
+      cropTop.style.left = '0'; cropTop.style.top = '0';
+      cropTop.style.width = '100%'; cropTop.style.height = topPct + '%';
+
+      cropBottom.style.display = 'block';
+      cropBottom.style.left = '0'; cropBottom.style.top = bottomPct + '%';
+      cropBottom.style.width = '100%'; cropBottom.style.height = (100 - bottomPct) + '%';
+
+      cropLeft.style.display = 'block';
+      cropLeft.style.left = '0'; cropLeft.style.top = topPct + '%';
+      cropLeft.style.width = leftPct + '%'; cropLeft.style.height = hPct + '%';
+
+      cropRight.style.display = 'block';
+      cropRight.style.left = rightPct + '%'; cropRight.style.top = topPct + '%';
+      cropRight.style.width = (100 - rightPct) + '%'; cropRight.style.height = hPct + '%';
+    }
+
     // renderAnnotations positions every annotation as a percentage of the
     // image's natural (decoded) size — not a pixel ratio derived from the
     // image's on-screen rendered size (img.clientWidth). naturalWidth/
@@ -511,21 +578,24 @@ const editorJS = `
     }
     if (img.complete && img.naturalWidth) {
       renderAnnotations();
+      renderCrop();
     } else {
-      img.addEventListener('load', renderAnnotations);
+      img.addEventListener('load', function() { renderAnnotations(); renderCrop(); });
     }
 
     imgWrap.appendChild(imgFrame);
 
     stepEditors[step.index] = {
-      // setStepData is used after undo/redo/reset, which can change both
-      // the image bytes and the annotation list atomically — it replaces
-      // this step's local annotation data and re-renders the overlay, and
-      // the caller separately calls bustImageCache() since the image
-      // bytes may also have changed.
+      // setStepData is used after undo/redo/reset, which can change the
+      // image bytes, annotation list, and crop atomically — it replaces
+      // this step's local data and re-renders both overlays, and the
+      // caller separately calls bustImageCache() since the image bytes
+      // may also have changed.
       setStepData: function(newStep) {
         step.annotations = newStep.annotations || [];
+        step.crop = newStep.crop || null;
         renderAnnotations();
+        renderCrop();
       },
       addAnnotationLocal: function(ann) {
         step.annotations = step.annotations || [];
@@ -542,9 +612,16 @@ const editorJS = `
       },
     };
 
+    clearCropBtn.disabled = !step.crop;
+    clearCropBtn.addEventListener('click', function() {
+      apiJSON('POST', '/api/crop/clear', {index: step.index}).then(function(newStep) {
+        stepEditors[step.index].setStepData(newStep);
+      }).catch(function(e) { alert('Clear crop failed: ' + e.message); });
+    });
+
     setupDrawing({
       img: img, imgFrame: imgFrame, overlay: overlay, handles: drawHandles,
-      redactBtn: redactBtn, highlightBtn: highlightBtn,
+      redactBtn: redactBtn, highlightBtn: highlightBtn, cropBtn: cropBtn,
       applyBtn: applyBtn, cancelBtn: cancelBtn,
       undoBtn: undoBtn, redoBtn: redoBtn, resetBtn: resetBtn,
       modeHint: modeHint, stepIndex: step.index,
@@ -814,11 +891,13 @@ const editorJS = `
       el.modeHint.textContent = mode ? ('Drag on the image to draw a ' + mode + '.') : '';
       el.redactBtn.classList.toggle('armed', mode === 'redact');
       el.highlightBtn.classList.toggle('armed', mode === 'highlight');
+      el.cropBtn.classList.toggle('armed', mode === 'crop');
     }
 
     function updateButtonStates() {
       el.redactBtn.disabled = !!pending;
       el.highlightBtn.disabled = !!pending;
+      el.cropBtn.disabled = !!pending;
     }
 
     function framePos(e) {
@@ -858,6 +937,10 @@ const editorJS = `
     el.highlightBtn.addEventListener('click', function() {
       if (pending) return;
       setArmed(armedMode === 'highlight' ? null : 'highlight');
+    });
+    el.cropBtn.addEventListener('click', function() {
+      if (pending) return;
+      setArmed(armedMode === 'crop' ? null : 'crop');
     });
 
     el.img.addEventListener('mousedown', function(e) {
@@ -940,9 +1023,14 @@ const editorJS = `
         x: pending.x * scaleX, y: pending.y * scaleY,
         w: pending.w * scaleX, h: pending.h * scaleY,
       };
-      var request = mode === 'redact'
-        ? apiJSON('POST', '/api/edit-image', Object.assign({index: el.stepIndex, style: el.getRedactStyle()}, rect))
-        : apiJSON('POST', '/api/annotation', Object.assign({index: el.stepIndex}, rect));
+      var request;
+      if (mode === 'redact') {
+        request = apiJSON('POST', '/api/edit-image', Object.assign({index: el.stepIndex, style: el.getRedactStyle()}, rect));
+      } else if (mode === 'crop') {
+        request = apiJSON('POST', '/api/crop', Object.assign({index: el.stepIndex}, rect));
+      } else {
+        request = apiJSON('POST', '/api/annotation', Object.assign({index: el.stepIndex}, rect));
+      }
       request.then(function(data) {
         pending = null;
         setArmed(null);
@@ -953,6 +1041,8 @@ const editorJS = `
         if (mode === 'redact') {
           editor.setStepData(data);
           editor.bustImageCache();
+        } else if (mode === 'crop') {
+          editor.setStepData(data);
         } else {
           editor.addAnnotationLocal(data);
         }

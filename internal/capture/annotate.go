@@ -116,6 +116,48 @@ func RenderAnnotations(pngData []byte, annotations []Annotation) ([]byte, error)
 	return out.Bytes(), nil
 }
 
+// Crop returns a new image containing only the given rectangular region
+// (in the image's own pixel coordinates), clamped to the image's actual
+// bounds — a crop rectangle drawn slightly past an edge (a very
+// plausible off-by-a-few-pixels drag, especially near a corner) clips to
+// what actually exists rather than erroring or padding with blank
+// pixels. Unlike Redact, this never mutates the caller's stored file
+// (see session.Step.Crop's doc comment) — it's called fresh at export
+// time against the original bytes every time.
+func Crop(pngData []byte, x, y, w, h float64) ([]byte, error) {
+	img, err := png.Decode(bytes.NewReader(pngData))
+	if err != nil {
+		return nil, fmt.Errorf("decode image: %w", err)
+	}
+	bounds := img.Bounds()
+	minX, minY := int(math.Round(x)), int(math.Round(y))
+	maxX, maxY := int(math.Round(x+w)), int(math.Round(y+h))
+	if minX < bounds.Min.X {
+		minX = bounds.Min.X
+	}
+	if minY < bounds.Min.Y {
+		minY = bounds.Min.Y
+	}
+	if maxX > bounds.Max.X {
+		maxX = bounds.Max.X
+	}
+	if maxY > bounds.Max.Y {
+		maxY = bounds.Max.Y
+	}
+	if minX >= maxX || minY >= maxY {
+		return nil, fmt.Errorf("crop rectangle is entirely outside the image")
+	}
+
+	cropped := image.NewRGBA(image.Rect(0, 0, maxX-minX, maxY-minY))
+	draw.Draw(cropped, cropped.Bounds(), img, image.Point{X: minX, Y: minY}, draw.Src)
+
+	var out bytes.Buffer
+	if err := png.Encode(&out, cropped); err != nil {
+		return nil, fmt.Errorf("encode cropped image: %w", err)
+	}
+	return out.Bytes(), nil
+}
+
 // RedactStyleSolid fills the region with opaque black — genuinely
 // unrecoverable, per docs/product/06-editing-and-versioning.md's redaction
 // carve-out. This is the default and the only style that should be used for

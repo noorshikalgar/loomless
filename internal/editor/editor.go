@@ -11,7 +11,7 @@
 // Most mutations go through internal/session's edit functions
 // (ReorderSteps/SetStepHidden/EditNote/EditTitle/EditWindowInfo/
 // EditImage/AddAnnotation/UpdateAnnotation/DeleteAnnotation/
-// ReorderAnnotations), which reload
+// ReorderAnnotations/SetCrop/ClearCrop), which reload
 // from disk, mutate, log to Session.EditLog, and save — this package
 // holds no *session* state itself beyond the name and directory, so it
 // can't drift from what's actually on disk between requests. It does
@@ -70,8 +70,9 @@ func NewHandler(name string) (http.Handler, error) {
 	}
 
 	// stepSnapshot captures a step's full editable surface — current
-	// image bytes plus its annotation list — as one editSnapshot, for
-	// pushing onto the undo history before a mutation is applied.
+	// image bytes, annotation list, and crop rectangle — as one
+	// editSnapshot, for pushing onto the undo history before a mutation
+	// is applied.
 	stepSnapshot := func(stepIndex int) (editSnapshot, error) {
 		step, err := findStep(stepIndex)
 		if err != nil {
@@ -85,13 +86,13 @@ func NewHandler(name string) (http.Handler, error) {
 			}
 			imgBytes = data
 		}
-		return editSnapshot{Image: imgBytes, Annotations: cloneAnnotations(step.Annotations)}, nil
+		return editSnapshot{Image: imgBytes, Annotations: cloneAnnotations(step.Annotations), Crop: cloneCrop(step.Crop)}, nil
 	}
 
 	// applySnapshot restores a step's image bytes (if the step has a
-	// screenshot) and annotation list from a snapshot — used by
-	// undo/redo/reset to jump straight to a prior state in one atomic
-	// step, rather than replaying individual mutations.
+	// screenshot), annotation list, and crop rectangle from a snapshot —
+	// used by undo/redo/reset to jump straight to a prior state in one
+	// atomic step, rather than replaying individual mutations.
 	applySnapshot := func(stepIndex int, snap editSnapshot) (session.Step, error) {
 		step, err := findStep(stepIndex)
 		if err != nil {
@@ -102,7 +103,7 @@ func NewHandler(name string) (http.Handler, error) {
 				return session.Step{}, fmt.Errorf("write image: %w", err)
 			}
 		}
-		if _, err := session.SetAnnotations(name, stepIndex, snap.Annotations); err != nil {
+		if _, err := session.SetStepPresentation(name, stepIndex, snap.Annotations, snap.Crop); err != nil {
 			return session.Step{}, err
 		}
 		return findStep(stepIndex)
@@ -346,6 +347,55 @@ func NewHandler(name string) (http.Handler, error) {
 		}
 		history.push(body.Index, before)
 		w.WriteHeader(http.StatusNoContent)
+	})
+	// /api/crop sets (replacing any existing) crop rectangle for a step.
+	// Like annotations and unlike redaction, this never touches the
+	// stored image file — see session.Step.Crop's doc comment — so
+	// there's no "before" image bytes to worry about here, only the
+	// presentation-time snapshot.
+	mux.HandleFunc("POST /api/crop", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index int     `json:"index"`
+			X     float64 `json:"x"`
+			Y     float64 `json:"y"`
+			W     float64 `json:"w"`
+			H     float64 `json:"h"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		before, err := stepSnapshot(body.Index)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.SetCrop(name, body.Index, body.X, body.Y, body.W, body.H); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		history.push(body.Index, before)
+		writeStep(w, body.Index)
+	})
+	mux.HandleFunc("POST /api/crop/clear", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index int `json:"index"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		before, err := stepSnapshot(body.Index)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.ClearCrop(name, body.Index); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		history.push(body.Index, before)
+		writeStep(w, body.Index)
 	})
 	mux.HandleFunc("POST /api/undo", func(w http.ResponseWriter, r *http.Request) {
 		handleHistoryOp(w, r, name, history.undoStep, stepSnapshot, applySnapshot, "undo")

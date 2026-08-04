@@ -59,6 +59,30 @@ type Step struct {
 	// of redacting something is that it's actually gone, not an object
 	// you could accidentally un-hide later.
 	Annotations []Annotation `json:"annotations,omitempty"`
+
+	// Crop is the visible region of ImageFile, in the image's own pixel
+	// coordinates, or nil for "the whole image" (every step before this
+	// field existed, and every step nobody has cropped). Like
+	// Annotations and unlike EditImage's redaction, this is
+	// presentation-time data — ImageFile's pixels are never trimmed on
+	// disk, only at export/flatten time (internal/export), so a crop is
+	// always adjustable or reversible later. Framing is a legibility
+	// choice ("cut the noise around what matters"), not a security one;
+	// nothing about cropping needs the destroy-the-pixels guarantee
+	// redaction exists for.
+	Crop *CropRect `json:"crop,omitempty"`
+}
+
+// CropRect is a rectangular region in an image's own pixel coordinates —
+// same shape as an Annotation's position/size fields, but its own type
+// rather than reusing Annotation, since a crop has no ID/Number/Color
+// and there's at most one per step (cropping again always starts over
+// from the full original image, not stacked with a previous crop).
+type CropRect struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
 }
 
 // Annotation is one numbered highlight marker in image pixel coordinates.
@@ -874,14 +898,17 @@ func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string)
 	return created, s, nil
 }
 
-// SetAnnotations reloads the named session and replaces a step's entire
-// annotation list wholesale. Low-level and deliberately unlogged itself
-// (unlike every other function in this file) — it's the primitive the
-// editor's unified undo/redo/reset (internal/editor/history.go) uses to
-// restore a prior snapshot atomically; the caller is responsible for
-// logging the semantic action ("undo"/"redo"/"reset" — see LogEdit),
-// the same way image undo/redo/reset already do for pixel restores.
-func SetAnnotations(name string, stepIndex int, anns []Annotation) (*Session, error) {
+// SetStepPresentation reloads the named session and replaces a step's
+// entire annotation list and crop rectangle wholesale — every piece of
+// *presentation-time* step state (as opposed to EditImage's pixel-level
+// redaction, or the on-disk screenshot itself). Low-level and
+// deliberately unlogged itself (unlike every other function in this
+// file) — it's the primitive the editor's unified undo/redo/reset
+// (internal/editor/history.go) uses to restore a prior snapshot
+// atomically; the caller is responsible for logging the semantic action
+// ("undo"/"redo"/"reset" — see LogEdit), the same way image undo/redo/
+// reset already do for pixel restores.
+func SetStepPresentation(name string, stepIndex int, anns []Annotation, crop *CropRect) (*Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
 		return nil, err
@@ -891,6 +918,7 @@ func SetAnnotations(name string, stepIndex int, anns []Annotation) (*Session, er
 		return nil, err
 	}
 	target.Annotations = anns
+	target.Crop = crop
 	if err := save(dir, s); err != nil {
 		return nil, err
 	}
@@ -1024,6 +1052,69 @@ func DeleteAnnotation(name string, stepIndex, annotationID int) (*Session, error
 		return nil, err
 	}
 	return s, nil
+}
+
+// SetCrop reloads the named session and sets (or replaces) a step's
+// crop rectangle, in the image's own pixel coordinates.
+func SetCrop(name string, stepIndex int, x, y, w, h float64) (*Session, error) {
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("crop rectangle must have positive width and height")
+	}
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
+	}
+	old := target.Crop
+	target.Crop = &CropRect{X: x, Y: y, W: w, H: h}
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "set_crop", StepIndex: stepIndex,
+		OldValue: cropLogValue(old), NewValue: cropLogValue(target.Crop),
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// ClearCrop reloads the named session and removes a step's crop
+// rectangle, restoring the full original image at export time. A no-op
+// (not an error) if the step had no crop set — clearing an already-clear
+// crop isn't a mistake worth rejecting.
+func ClearCrop(name string, stepIndex int) (*Session, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+	target, err := findStep(s, stepIndex)
+	if err != nil {
+		return nil, err
+	}
+	if target.Crop == nil {
+		return s, nil
+	}
+	old := target.Crop
+	target.Crop = nil
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "clear_crop", StepIndex: stepIndex,
+		OldValue: cropLogValue(old),
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func cropLogValue(c *CropRect) string {
+	if c == nil {
+		return "none"
+	}
+	return fmt.Sprintf("rect(%.0f,%.0f,%.0f,%.0f)", c.X, c.Y, c.W, c.H)
 }
 
 // LogEdit reloads the named session, appends an already-built EditEntry

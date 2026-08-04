@@ -236,3 +236,71 @@ func TestParseAnnotationColor(t *testing.T) {
 		})
 	}
 }
+
+func TestCropReturnsOnlyTheRequestedRegion(t *testing.T) {
+	// Four quadrants of distinct colors, so cropping to exactly one
+	// quadrant is verifiable by checking every corner of the result.
+	img := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	quadrant := func(x, y int) color.RGBA {
+		switch {
+		case x < 50 && y < 50:
+			return color.RGBA{R: 255, A: 255} // top-left: red
+		case x >= 50 && y < 50:
+			return color.RGBA{G: 255, A: 255} // top-right: green
+		case x < 50 && y >= 50:
+			return color.RGBA{B: 255, A: 255} // bottom-left: blue
+		default:
+			return color.RGBA{R: 255, G: 255, A: 255} // bottom-right: yellow
+		}
+	}
+	for y := 0; y < 100; y++ {
+		for x := 0; x < 100; x++ {
+			img.SetRGBA(x, y, quadrant(x, y))
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode test image: %v", err)
+	}
+
+	// Crop to exactly the top-left (red) quadrant.
+	cropped, err := Crop(buf.Bytes(), 0, 0, 50, 50)
+	if err != nil {
+		t.Fatalf("Crop: %v", err)
+	}
+	out := decodePNG(t, cropped)
+	if b := out.Bounds(); b.Dx() != 50 || b.Dy() != 50 {
+		t.Fatalf("cropped image size = %dx%d, want 50x50", b.Dx(), b.Dy())
+	}
+	for _, p := range []image.Point{{0, 0}, {49, 0}, {0, 49}, {49, 49}, {25, 25}} {
+		r, g, b, a := out.At(p.X, p.Y).RGBA()
+		got := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+		want := color.RGBA{R: 255, A: 255}
+		if got != want {
+			t.Errorf("cropped pixel %v = %v, want %v (red — the crop should contain only the top-left quadrant)", p, got, want)
+		}
+	}
+}
+
+// TestCropClampsToImageBounds confirms a crop rectangle that extends
+// past an edge (a very plausible off-by-a-few-pixels drag near a corner)
+// clips to what actually exists in the image instead of erroring or
+// padding the result with blank pixels.
+func TestCropClampsToImageBounds(t *testing.T) {
+	src := solidTestImage(t, color.RGBA{R: 10, G: 20, B: 30, A: 255})
+	cropped, err := Crop(src, 80, 80, 50, 50) // extends 30px past both edges of a 100x100 image
+	if err != nil {
+		t.Fatalf("Crop: %v", err)
+	}
+	out := decodePNG(t, cropped)
+	if b := out.Bounds(); b.Dx() != 20 || b.Dy() != 20 {
+		t.Errorf("clamped crop size = %dx%d, want 20x20 (100-80 in each dimension)", b.Dx(), b.Dy())
+	}
+}
+
+func TestCropEntirelyOutsideImageReturnsError(t *testing.T) {
+	src := solidTestImage(t, color.RGBA{R: 1, G: 2, B: 3, A: 255})
+	if _, err := Crop(src, 200, 200, 50, 50); err == nil {
+		t.Error("Crop with a rectangle entirely outside the image succeeded, want an error")
+	}
+}
