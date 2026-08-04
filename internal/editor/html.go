@@ -322,15 +322,20 @@ const editorJS = `
       header.appendChild(upBtn);
       header.appendChild(downBtn);
       header.appendChild(hideBtn);
-      el.appendChild(header);
-
       // A content step (decision #29) is purely authored, with no
       // captured window to attribute — showing the "+ add app"
       // click-to-edit affordance there would invite the user to
       // attribute a paragraph of prose to an application, which makes
       // no sense. A real capture-time note step (no image, but still
       // captured live) keeps the window line, since it may genuinely
-      // have — or be worth adding — real window context.
+      // have — or be worth adding — real window context. The header-
+      // style cycle button (decision #31) only makes sense wherever
+      // that window line itself can appear at all.
+      if (!step.command && !step.is_content) {
+        header.appendChild(buildHeaderStyleButton(step));
+      }
+      el.appendChild(header);
+
       if (!step.command && !step.is_content) {
         el.appendChild(buildWindowLine(step));
       }
@@ -513,6 +518,31 @@ const editorJS = `
     return wrap;
   }
 
+  // buildHeaderStyleButton cycles a step's header_style (decision #31)
+  // through Both -> App -> Title -> Hidden -> Both — a plain button in
+  // the step-header row, always visible right alongside Up/Down/Hide
+  // rather than tucked away inside the window-line's own edit mode, so
+  // there's never a dead end: even when the current style is "Hidden"
+  // (and the window line itself renders nothing), this button is still
+  // sitting right there to cycle back. It only ever changes which
+  // parts of WindowApp/WindowTitle are DISPLAYED — never the captured
+  // values themselves, which stay fully intact underneath every style.
+  function buildHeaderStyleButton(step) {
+    var STYLES = ['', 'app', 'title', 'hidden'];
+    var LABELS = {'': 'Header: Both', app: 'Header: App', title: 'Header: Title', hidden: 'Header: Hidden'};
+    var btn = document.createElement('button');
+    btn.textContent = LABELS[step.header_style || ''];
+    btn.title = 'Cycle which parts of the captured window info this step shows';
+    btn.addEventListener('click', function() {
+      var next = STYLES[(STYLES.indexOf(step.header_style || '') + 1) % STYLES.length];
+      api('POST', '/api/header-style', {index: step.index, style: next}).then(function() {
+        step.header_style = next;
+        render();
+      }).catch(function(e) { alert('Change failed: ' + e.message); });
+    });
+    return btn;
+  }
+
   // buildWindowLine renders the captured app/window-title line the same
   // click-to-edit way — either field can be corrected or filled in by
   // hand (a generic process name, a stale title, or nothing captured at
@@ -522,21 +552,36 @@ const editorJS = `
     var wrap = document.createElement('div');
     wrap.className = 'window-line';
 
+    // show() honors header_style (decision #31): "hidden" renders
+    // nothing at all here — the header row's own cycle button
+    // (buildHeaderStyleButton) is the persistent way back, so an empty
+    // line here is never a dead end. "app"/"title" show only that one
+    // field, still click-to-edit; the default ("") shows both, exactly
+    // the original behavior.
     function show() {
       wrap.innerHTML = '';
-      var appSpan = document.createElement('span');
-      appSpan.textContent = step.window_app || '+ add app';
-      appSpan.title = 'Click to edit';
-      appSpan.addEventListener('click', edit);
-      wrap.appendChild(appSpan);
+      if (step.header_style === 'hidden') return;
+      var showApp = step.header_style !== 'title';
+      var showTitle = step.header_style !== 'app';
 
-      var titleSpan = document.createElement('span');
-      titleSpan.style.color = '#ccc';
-      titleSpan.style.fontWeight = 'normal';
-      titleSpan.textContent = step.window_title ? (' — ' + step.window_title) : '';
-      titleSpan.title = 'Click to edit';
-      titleSpan.addEventListener('click', edit);
-      wrap.appendChild(titleSpan);
+      if (showApp) {
+        var appSpan = document.createElement('span');
+        appSpan.textContent = step.window_app || '+ add app';
+        appSpan.title = 'Click to edit';
+        appSpan.addEventListener('click', edit);
+        wrap.appendChild(appSpan);
+      }
+
+      if (showTitle) {
+        var titleSpan = document.createElement('span');
+        titleSpan.style.color = '#ccc';
+        titleSpan.style.fontWeight = 'normal';
+        var titleText = step.window_title || (showApp ? '' : '+ add title');
+        titleSpan.textContent = (showApp && titleText) ? (' — ' + titleText) : titleText;
+        titleSpan.title = 'Click to edit';
+        titleSpan.addEventListener('click', edit);
+        wrap.appendChild(titleSpan);
+      }
     }
 
     function edit() {

@@ -221,6 +221,25 @@ func NewHandler(name string) (http.Handler, error) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	// /api/header-style sets which parts of a step's window info its
+	// header shows (decision #31) — "", "app", "title", or "hidden".
+	// Purely a display choice; the underlying WindowApp/WindowTitle are
+	// untouched either way.
+	mux.HandleFunc("POST /api/header-style", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Index int    `json:"index"`
+			Style string `json:"style"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := session.EditHeaderStyle(name, body.Index, body.Style); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	// /api/edit-image is redaction only — highlights go through
 	// /api/annotation instead (decision #18), since unlike redaction
 	// they're meant to stay movable/renumberable/deletable, not baked

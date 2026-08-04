@@ -72,6 +72,17 @@ type Step struct {
 	// redaction exists for.
 	Crop *CropRect `json:"crop,omitempty"`
 
+	// HeaderStyle picks which parts of the captured window info a
+	// step's editor/export header shows: "" (default — App — Title,
+	// the original behavior every step before this field existed
+	// keeps), "app" (app name only), "title" (window title only), or
+	// "hidden" (neither — the window line doesn't render at all). This
+	// is purely a display choice over the SAME underlying WindowApp/
+	// WindowTitle data (decision #31) — it never clears or overwrites
+	// either field, so switching back to "" (or any other style) later
+	// always has the full original captured info to show again.
+	HeaderStyle string `json:"header_style,omitempty"`
+
 	// IsContent marks a step authored directly in the editor (decision
 	// #29) rather than captured from a window/click or terminal command —
 	// a freeform Markdown block, inserted between captured steps to add
@@ -946,6 +957,50 @@ func EditWindowInfo(name string, stepIndex int, app, windowTitle string) (*Sessi
 	s.EditLog = append(s.EditLog, EditEntry{
 		Timestamp: time.Now(), Action: "edit_window", StepIndex: stepIndex,
 		OldValue: oldApp + " — " + oldTitle, NewValue: app + " — " + maskedTitle,
+	})
+	if err := save(dir, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// validHeaderStyles are the only values EditHeaderStyle accepts —
+// rejecting anything else outright rather than silently storing a typo
+// that would then just fall through to "" (Both) behavior with no
+// indication anything was wrong.
+var validHeaderStyles = map[string]bool{"": true, "app": true, "title": true, "hidden": true}
+
+// EditHeaderStyle reloads the named session and sets which parts of a
+// step's captured window info its header displays (decision #31) —
+// "", "app", "title", or "hidden". This never touches WindowApp/
+// WindowTitle themselves, only how they're shown, so it's always
+// reversible with the original data intact.
+func EditHeaderStyle(name string, stepIndex int, style string) (*Session, error) {
+	if !validHeaderStyles[style] {
+		return nil, fmt.Errorf("invalid header style %q (want \"\", \"app\", \"title\", or \"hidden\")", style)
+	}
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, err
+	}
+
+	found := false
+	var old string
+	for i := range s.Steps {
+		if s.Steps[i].Index == stepIndex {
+			old = s.Steps[i].HeaderStyle
+			s.Steps[i].HeaderStyle = style
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
+	}
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "edit_header_style", StepIndex: stepIndex,
+		OldValue: old, NewValue: style,
 	})
 	if err := save(dir, s); err != nil {
 		return nil, err

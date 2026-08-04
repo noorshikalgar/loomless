@@ -158,3 +158,33 @@ func TestStepImagePathWritesFlattenedCopyForCropAlone(t *testing.T) {
 		t.Errorf("flattened copy size = %dx%d, want 50x50 (the crop)", b.Dx(), b.Dy())
 	}
 }
+
+func TestWindowLineSegments(t *testing.T) {
+	cases := []struct {
+		name string
+		step session.Step
+		want []string
+	}{
+		{"default both", session.Step{WindowApp: "Terminal", WindowTitle: "story edit test3"}, []string{"Terminal", "story edit test3"}},
+		{"default app only captured", session.Step{WindowApp: "Terminal"}, []string{"Terminal"}},
+		{"default nothing captured", session.Step{}, nil},
+		{"style app hides title", session.Step{WindowApp: "Terminal", WindowTitle: "story edit test3", HeaderStyle: "app"}, []string{"Terminal"}},
+		{"style title hides app", session.Step{WindowApp: "Terminal", WindowTitle: "story edit test3", HeaderStyle: "title"}, []string{"story edit test3"}},
+		{"style hidden hides everything", session.Step{WindowApp: "Terminal", WindowTitle: "story edit test3", HeaderStyle: "hidden"}, nil},
+		{"style app with no app captured", session.Step{WindowTitle: "story edit test3", HeaderStyle: "app"}, nil},
+		{"style title with no title captured", session.Step{WindowApp: "Terminal", HeaderStyle: "title"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := windowLineSegments(tc.step)
+			if len(got) != len(tc.want) {
+				t.Fatalf("windowLineSegments(%+v) = %v, want %v", tc.step, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("windowLineSegments(%+v)[%d] = %q, want %q", tc.step, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}

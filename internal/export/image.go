@@ -27,6 +27,30 @@ func stepHeading(step session.Step, position int) string {
 	return fmt.Sprintf("Step %d", position)
 }
 
+// windowLineSegments returns the pieces of a step's captured window
+// info to display, in order, honoring HeaderStyle (decision #31) — the
+// caller joins them with its own separator (each exporter's window
+// line has used a slightly different one since before this field
+// existed, and there's no reason to force them to match now). Nil when
+// there's nothing to show: HeaderStyle is "hidden", or the relevant
+// field(s) were never captured in the first place. HeaderStyle never
+// touches WindowApp/WindowTitle themselves — this is a display
+// decision made fresh from the same underlying data every time, so
+// switching styles is always fully reversible.
+func windowLineSegments(step session.Step) []string {
+	if step.HeaderStyle == "hidden" {
+		return nil
+	}
+	var out []string
+	if step.HeaderStyle != "title" && step.WindowApp != "" {
+		out = append(out, step.WindowApp)
+	}
+	if step.HeaderStyle != "app" && step.WindowTitle != "" {
+		out = append(out, step.WindowTitle)
+	}
+	return out
+}
+
 // toCaptureAnnotations adapts session.Annotation to capture.Annotation —
 // two structurally-identical but distinct types, kept separate rather
 // than shared to avoid a capture<->session import cycle (session already

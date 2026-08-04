@@ -80,13 +80,9 @@ func renderTerminalStep(pdf *fpdf.Fpdf, step session.Step) {
 }
 
 func renderWindowStep(pdf *fpdf.Fpdf, step session.Step, dir string) {
-	if step.WindowApp != "" {
-		windowLine := step.WindowApp
-		if step.WindowTitle != "" {
-			windowLine += " - " + step.WindowTitle
-		}
+	if segs := windowLineSegments(step); len(segs) > 0 {
 		pdf.SetFont("Helvetica", "B", 10)
-		pdf.MultiCell(0, 6, safe("Window: "+windowLine), "", "L", false)
+		pdf.MultiCell(0, 6, safe("Window: "+strings.Join(segs, " - ")), "", "L", false)
 	}
 	if step.Note != "" {
 		writeNotePDF(pdf, step.Note, dir)

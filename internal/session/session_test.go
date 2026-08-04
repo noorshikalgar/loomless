@@ -766,3 +766,51 @@ func TestAddAnnotationShapeKindsPersist(t *testing.T) {
 		t.Errorf("line annotation bounding box = (%v,%v), want derived (50,50) from its two points", anns[1].W, anns[1].H)
 	}
 }
+
+func TestEditHeaderStylePersistsAndRoundTrips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("headerstyle"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("headerstyle", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+
+	for _, style := range []string{"app", "title", "hidden", ""} {
+		s, err := EditHeaderStyle("headerstyle", step.Index, style)
+		if err != nil {
+			t.Fatalf("EditHeaderStyle(%q): %v", style, err)
+		}
+		if s.Steps[0].HeaderStyle != style {
+			t.Errorf("HeaderStyle = %q, want %q", s.Steps[0].HeaderStyle, style)
+		}
+		reloaded, _, err := Load("headerstyle")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if reloaded.Steps[0].HeaderStyle != style {
+			t.Errorf("reloaded HeaderStyle = %q, want %q", reloaded.Steps[0].HeaderStyle, style)
+		}
+		// The underlying captured data must never be touched by a
+		// display-only setting — switching styles back and forth has
+		// to always have the same original App/Title to show again.
+		if reloaded.Steps[0].WindowApp != "App" || reloaded.Steps[0].WindowTitle != "Title" {
+			t.Errorf("EditHeaderStyle(%q) altered WindowApp/WindowTitle: got %q/%q, want unchanged App/Title", style, reloaded.Steps[0].WindowApp, reloaded.Steps[0].WindowTitle)
+		}
+	}
+}
+
+func TestEditHeaderStyleRejectsUnknownValue(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("badstyle"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("badstyle", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	if _, err := EditHeaderStyle("badstyle", step.Index, "bogus"); err == nil {
+		t.Error("EditHeaderStyle with an unrecognized style succeeded, want an error")
+	}
+}

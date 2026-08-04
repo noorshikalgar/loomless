@@ -2084,6 +2084,83 @@ also true for `Kind` and `Annotated`.
    legacy-true compatibility path works end to end, not just in a unit
    test.
 
+## 31. Configurable header display style (App/Title/Both/Hidden)
+
+Decided 2026-08-04, prompted by the user asking directly why the
+window line always shows as two segments and whether it could change —
+answered with a scoping question (what should change: nothing, a
+merged field, app-only, or something else?), and the answer was
+"multiple templates... hide show... some where," which this turns into
+four concrete, always-reversible display styles rather than a redesign
+of the underlying data.
+
+**Purely a display choice layered over data that was already there —
+no new capture behavior, and the underlying fields are never
+touched.** `Step.HeaderStyle` ("", "app", "title", or "hidden") only
+changes which parts of the ALREADY-captured `WindowApp`/`WindowTitle`
+get shown; switching styles back and forth always has the full
+original captured info to show again, since nothing is ever cleared or
+overwritten. This mirrors the exact same non-destructive-presentation-
+layer pattern this project keeps reaching for — annotations over a
+clean screenshot (#18), crop over an untrimmed original (#26) — applied
+here to text instead of pixels.
+
+**One control, always visible, never a dead end.** A "Header: Both /
+App / Title / Hidden" button sits in the step-header row next to the
+existing Up/Down/Hide controls — NOT tucked inside the window-line's
+own click-to-edit mode, which was the first design considered and
+rejected: if the cycle control lived only inside the edit view, setting
+the style to "Hidden" would remove the window line's own text entirely,
+and with it the only way back in (nothing left to click to reopen edit
+mode). Putting it in the header row instead — a row of controls that's
+already always rendered regardless of the window line's own content —
+means "Hidden" is always one click from "Both" again, matching the "hide
+show... somewhere" request literally: the somewhere is a fixed, stable
+location, not conditional on current visibility.
+
+**A shared `windowLineSegments` helper, not three copies of the same
+branching logic.** Markdown, PDF, and Slides each already rendered the
+window line with a slightly different separator style (an em-dash with
+markdown bold, a plain hyphen for fpdf's ASCII-only core fonts, an
+em-dash in raw HTML) — duplicating "if hidden show nothing, if app-only
+show just the app..." three times, once per exporter, would have been
+three places to keep in sync and three places a next edge case could
+diverge. `windowLineSegments` returns the 0/1/2 strings to show, in
+order; each exporter still owns its own separator and formatting,
+joining those segments its own way — the actual style-selection
+DECISION happens once.
+
+**Verified:**
+
+1. Unit tests: `internal/session` (`EditHeaderStyle` persists and
+   round-trips through reload for every valid style, in sequence,
+   confirming `WindowApp`/`WindowTitle` are byte-identical throughout —
+   the specific claim "purely a display choice" makes; an unrecognized
+   style value is rejected outright rather than silently stored).
+   `internal/export` (`windowLineSegments` table-tested across both/
+   app-only-captured/nothing-captured baseline cases AND all three
+   non-default styles, including the edge case of requesting "app" on a
+   step that only ever captured a title, or vice versa — correctly
+   empty, not a panic or a blank segment).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Live browser verification against a real session: clicked the cycle
+   button through all four states, confirming via direct DOM inspection
+   (not just eyeballing rendered text, since this particular test
+   fixture's WindowApp and WindowTitle happened to be identical
+   strings, which would have made an app-only and title-only render
+   visually indistinguishable) that "Title" mode's window-line `<div>`
+   contains exactly one `<span>` — proving the app segment was actually
+   omitted from the DOM, not just visually coincidental; confirmed via
+   `GET /api/session` after every step that `WindowApp`/`WindowTitle`
+   never changed while `header_style` did; confirmed "Hidden" removes
+   the window line from the page entirely while the cycle button stays
+   present and functional (clicked it again, confirmed it cycled back
+   to "Both" and the line reappeared with its original text intact).
+   Set a step's style to "hidden" via the live API and exported to
+   Markdown, confirming the `**Window:**` line was genuinely absent
+   from the output file for that step, proving the export path (not
+   just the editor's own preview) honors the setting.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

@@ -51,12 +51,8 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 				fmt.Fprintf(&b, "<p class=\"exit\">Exited %d.</p>\n", *step.ExitCode)
 			}
 		} else {
-			if step.WindowApp != "" {
-				windowLine := step.WindowApp
-				if step.WindowTitle != "" {
-					windowLine += " — " + step.WindowTitle
-				}
-				fmt.Fprintf(&b, "<p class=\"window\">%s</p>\n", html.EscapeString(windowLine))
+			if segs := windowLineSegments(step); len(segs) > 0 {
+				fmt.Fprintf(&b, "<p class=\"window\">%s</p>\n", html.EscapeString(strings.Join(segs, " — ")))
 			}
 			if step.Note != "" {
 				// inlineLocalImages first: a content step's Markdown may

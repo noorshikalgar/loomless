@@ -52,12 +52,8 @@ func Markdown(s *session.Session, dir string) string {
 			continue
 		}
 
-		if step.WindowApp != "" {
-			fmt.Fprintf(&b, "**Window:** %s", step.WindowApp)
-			if step.WindowTitle != "" {
-				fmt.Fprintf(&b, " — %s", step.WindowTitle)
-			}
-			b.WriteString("\n\n")
+		if segs := windowLineSegments(step); len(segs) > 0 {
+			fmt.Fprintf(&b, "**Window:** %s\n\n", strings.Join(segs, " — "))
 		}
 		if step.Note != "" {
 			fmt.Fprintf(&b, "%s\n\n", step.Note)
