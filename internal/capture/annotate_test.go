@@ -213,6 +213,57 @@ func TestRenderAnnotationsUsesPerAnnotationColor(t *testing.T) {
 	}
 }
 
+// TestRenderAnnotationsFreehandDrawsAlongThePathNotARectangle confirms a
+// freehand annotation (Points set) actually draws a stroke following its
+// path, and specifically does NOT draw a rectangle outline — the two
+// annotation kinds share one struct, so it's worth pinning down that the
+// branch in RenderAnnotations picks the right one.
+func TestRenderAnnotationsFreehandDrawsAlongThePathNotARectangle(t *testing.T) {
+	original := color.RGBA{R: 10, G: 20, B: 30, A: 255}
+	src := solidTestImage(t, original)
+
+	// A straight horizontal stroke from (10,50) to (80,50).
+	ann := Annotation{Number: 1, X: 10, Y: 50, W: 70, H: 0, Points: []Point{{X: 10, Y: 50}, {X: 80, Y: 50}}}
+	edited, err := RenderAnnotations(src, []Annotation{ann})
+	if err != nil {
+		t.Fatalf("RenderAnnotations: %v", err)
+	}
+	img := decodePNG(t, edited)
+
+	// The middle of the stroke's path should be painted.
+	r, g, b, a := img.At(45, 50).RGBA()
+	got := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got == original {
+		t.Errorf("pixel (45,50) on the stroke's path = %v, want it painted (differ from untouched original)", got)
+	}
+
+	// A point well below the stroke's straight horizontal line — inside
+	// what a *rectangle* outline for the same bounding box would have
+	// drawn as its bottom border, but nowhere near the actual path —
+	// must stay untouched. This is what actually distinguishes "drew a
+	// stroke" from "drew a rectangle and got lucky."
+	r, g, b, a = img.At(45, 50+int(annotationBorderThickness)+5).RGBA()
+	got = color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got != original {
+		t.Errorf("pixel below the stroke's path = %v, want untouched original %v (a rectangle would have drawn a border there; a freehand stroke should not)", got, original)
+	}
+}
+
+func TestDrawPolylineSinglePointDrawsADot(t *testing.T) {
+	original := color.RGBA{R: 1, G: 2, B: 3, A: 255}
+	img := image.NewRGBA(image.Rect(0, 0, 50, 50))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: original}, image.Point{}, draw.Src)
+
+	c := color.RGBA{R: 200, G: 0, B: 0, A: 255}
+	drawPolyline(img, []Point{{X: 25, Y: 25}}, freehandStrokeThickness, c)
+
+	r, g, b, a := img.At(25, 25).RGBA()
+	got := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got != c {
+		t.Errorf("drawPolyline with a single point at its center = %v, want the stroke color %v", got, c)
+	}
+}
+
 func TestParseAnnotationColor(t *testing.T) {
 	cases := []struct {
 		name string

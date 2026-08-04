@@ -112,6 +112,28 @@ func TestShiftAnnotationsForCropDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+// TestShiftAnnotationsForCropShiftsFreehandPoints confirms every vertex
+// of a freehand stroke's path moves with the crop, not just the
+// annotation's bounding box — otherwise a cropped export would show the
+// badge in the right place but the actual drawn stroke offset from it.
+func TestShiftAnnotationsForCropShiftsFreehandPoints(t *testing.T) {
+	original := []session.Annotation{{
+		ID: 1, Number: 1, X: 50, Y: 50, W: 30, H: 30,
+		Points: []session.Point{{X: 50, Y: 50}, {X: 80, Y: 80}},
+	}}
+	shifted := shiftAnnotationsForCrop(original, session.CropRect{X: 20, Y: 20, W: 100, H: 100})
+
+	want := []session.Point{{X: 30, Y: 30}, {X: 60, Y: 60}}
+	if len(shifted[0].Points) != 2 || shifted[0].Points[0] != want[0] || shifted[0].Points[1] != want[1] {
+		t.Errorf("shifted Points = %v, want %v", shifted[0].Points, want)
+	}
+	// And the original, unshifted slice must stay untouched — same
+	// requirement as the bounding-box-only case above.
+	if original[0].Points[0].X != 50 || original[0].Points[0].Y != 50 {
+		t.Errorf("shiftAnnotationsForCrop mutated the caller's Points: got %v, want unchanged", original[0].Points)
+	}
+}
+
 func TestStepImagePathWritesFlattenedCopyForCropAlone(t *testing.T) {
 	dir := t.TempDir()
 	imageFile := writeTestPNG(t, dir, "step-0001.png", color.RGBA{R: 1, G: 2, B: 3, A: 255})

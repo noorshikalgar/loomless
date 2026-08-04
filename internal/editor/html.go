@@ -45,6 +45,8 @@ const editorCSS = `
   .img-toolbar button.armed.redact-btn { background: #7a2a2a; border-color: #a03c3c; }
   .img-toolbar button.armed.highlight-btn { background: #7a5a1a; border-color: #a07c2c; }
   .img-toolbar button.armed.crop-btn { background: #1a5a2e; border-color: #2c7c44; }
+  .img-toolbar button.armed.freehand-btn { background: #3a2a6a; border-color: #5c4c9c; }
+  .freehand-preview { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; pointer-events: none; z-index: 2; overflow: visible; }
   .img-toolbar button.apply-btn { background: #2a5a3a; border-color: #3a7a4a; }
   .img-toolbar button.style-selected { background: #2a4a6a; border-color: #3c6ca0; }
   .img-toolbar .sep { width: 1px; height: 1.2rem; background: #444; margin: 0 0.2rem; }
@@ -73,6 +75,8 @@ const editorCSS = `
   .handle-nw, .handle-se { cursor: nwse-resize; }
   .handle-ne, .handle-sw { cursor: nesw-resize; }
   .annotation { position: absolute; border: 3px solid #ff3b30; box-sizing: border-box; cursor: move; z-index: 3; }
+  .annotation.freehand { border: none; }
+  .annotation.freehand svg { display: block; }
   /* Resize handles on an EXISTING annotation are chrome, not content —
      shown only on hover/pin, same as the toolbar, so the default view of
      an annotated screenshot is just the highlight and its number, not a
@@ -459,6 +463,7 @@ const editorJS = `
     var solidBtn = mkPlainBtn('Solid', 'style-selected');
     var blurBtn = mkPlainBtn('Blur');
     var highlightBtn = mkPlainBtn('Draw Highlight', 'highlight-btn');
+    var freehandBtn = mkPlainBtn('Draw Freehand', 'freehand-btn');
     var cropBtn = mkPlainBtn('Draw Crop', 'crop-btn');
     var clearCropBtn = mkPlainBtn('Clear Crop');
     var sep1 = document.createElement('span');
@@ -472,7 +477,7 @@ const editorJS = `
     var resetBtn = mkPlainBtn('Reset');
     var modeHint = document.createElement('span');
     modeHint.className = 'mode-hint';
-    [redactBtn, solidBtn, blurBtn, highlightBtn, cropBtn, clearCropBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
+    [redactBtn, solidBtn, blurBtn, highlightBtn, freehandBtn, cropBtn, clearCropBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
       .forEach(function(elm) { toolbar.appendChild(elm); });
     imgWrap.appendChild(toolbar);
 
@@ -496,6 +501,23 @@ const editorJS = `
     var overlay = document.createElement('div');
     overlay.className = 'drag-overlay';
     imgFrame.appendChild(overlay);
+
+    // Live preview while actively drawing a NEW freehand stroke — an SVG
+    // sized to the whole frame (not just a sub-region like the crop/
+    // redact/highlight drag-overlay, since a stroke's own extent isn't
+    // known ahead of time) with a viewBox in the image's natural pixel
+    // space, so points captured during drawing can be written straight
+    // into the polyline with no coordinate conversion at all.
+    var freehandPreviewSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    freehandPreviewSvg.setAttribute('class', 'freehand-preview');
+    var freehandPreviewPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    freehandPreviewPoly.setAttribute('fill', 'none');
+    freehandPreviewPoly.setAttribute('stroke-width', '4');
+    freehandPreviewPoly.setAttribute('stroke-linecap', 'round');
+    freehandPreviewPoly.setAttribute('stroke-linejoin', 'round');
+    freehandPreviewPoly.setAttribute('stroke', DEFAULT_ANNOTATION_COLOR);
+    freehandPreviewSvg.appendChild(freehandPreviewPoly);
+    imgFrame.appendChild(freehandPreviewSvg);
 
     var drawHandles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
       var h = document.createElement('div');
@@ -621,7 +643,8 @@ const editorJS = `
 
     setupDrawing({
       img: img, imgFrame: imgFrame, overlay: overlay, handles: drawHandles,
-      redactBtn: redactBtn, highlightBtn: highlightBtn, cropBtn: cropBtn,
+      redactBtn: redactBtn, highlightBtn: highlightBtn, cropBtn: cropBtn, freehandBtn: freehandBtn,
+      freehandPreviewSvg: freehandPreviewSvg, freehandPreviewPoly: freehandPreviewPoly,
       applyBtn: applyBtn, cancelBtn: cancelBtn,
       undoBtn: undoBtn, redoBtn: redoBtn, resetBtn: resetBtn,
       modeHint: modeHint, stepIndex: step.index,
@@ -668,8 +691,9 @@ const editorJS = `
   // and dragging real on-screen pixels), so there's no placement-timing
   // hazard there.
   function buildAnnotationElement(img, ann, pos, step, onStackChanged) {
+    var isFreehand = !!(ann.points && ann.points.length);
     var el = document.createElement('div');
-    el.className = 'annotation';
+    el.className = 'annotation' + (isFreehand ? ' freehand' : '');
 
     // color() always resolves to a real, renderable value (never '' or
     // undefined) so every place a color is read — inline styles here,
@@ -685,12 +709,46 @@ const editorJS = `
       el.style.top = (topPct * 100) + '%';
       el.style.width = (ann.w / img.naturalWidth * 100) + '%';
       el.style.height = (ann.h / img.naturalHeight * 100) + '%';
-      el.style.borderColor = color();
+      if (!isFreehand) el.style.borderColor = color();
       // A toolbar floating above an annotation near the top of the image
       // would be clipped off the frame — flip it below instead.
       el.classList.toggle('toolbar-below', topPct < 0.08);
     }
     place();
+
+    // A freehand stroke draws as an SVG polyline inside the same
+    // percentage-positioned box every annotation already uses for its
+    // bounding rectangle — the box supplies position/size (untouched,
+    // same code as a rectangle annotation), the SVG's viewBox just
+    // remaps the path's natural-pixel coordinates onto whatever CSS
+    // pixel size that box actually renders at, including on resize.
+    // renderStroke is a no-op for a rectangle annotation (never
+    // reassigned below) so commitColor can call it unconditionally
+    // rather than needing to know which kind of annotation this is.
+    var renderStroke = function() {};
+    if (isFreehand) {
+      var svgNS = 'http://www.w3.org/2000/svg';
+      var svg = document.createElementNS(svgNS, 'svg');
+      svg.setAttribute('viewBox', '0 0 ' + ann.w + ' ' + ann.h);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.style.position = 'absolute';
+      svg.style.left = '0'; svg.style.top = '0';
+      svg.style.width = '100%'; svg.style.height = '100%';
+      svg.style.overflow = 'visible';
+      var poly = document.createElementNS(svgNS, 'polyline');
+      poly.setAttribute('fill', 'none');
+      poly.setAttribute('stroke-width', '4');
+      poly.setAttribute('stroke-linecap', 'round');
+      poly.setAttribute('stroke-linejoin', 'round');
+      el.appendChild(svg);
+      svg.appendChild(poly);
+      renderStroke = function() {
+        svg.setAttribute('viewBox', '0 0 ' + ann.w + ' ' + ann.h);
+        poly.setAttribute('stroke', color());
+        poly.setAttribute('points', ann.points.map(function(p) { return (p.x - ann.x) + ',' + (p.y - ann.y); }).join(' '));
+      };
+      renderStroke();
+    }
 
     var badge = document.createElement('span');
     badge.className = 'annotation-badge';
@@ -783,18 +841,26 @@ const editorJS = `
       ann.color = colorInput.value;
       badge.style.background = color();
       el.style.borderColor = color();
+      renderStroke();
       api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h, number: ann.number, color: ann.color})
         .catch(function(e) {
           alert('Color change failed: ' + e.message);
           ann.color = prev;
           badge.style.background = color();
           el.style.borderColor = color();
+          renderStroke();
           colorInput.value = color();
         });
     }
     colorInput.addEventListener('change', commitColor);
 
-    var handles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
+    // Freehand strokes are move-only in this first pass — no corner
+    // handles, so no per-vertex or bounding-box resize. Scaling a
+    // hand-drawn path rarely preserves its character anyway (unlike a
+    // rectangle, where "resize" is exactly as meaningful as "draw it
+    // right the first time"), so redrawing is the expected way to fix
+    // a freehand annotation's shape; moving it is still worth keeping.
+    var handles = isFreehand ? [] : ['nw', 'ne', 'sw', 'se'].map(function(corner) {
       var h = document.createElement('div');
       h.className = 'resize-handle handle-' + corner;
       h.style.left = (corner.indexOf('w') !== -1 ? '0' : '100%');
@@ -808,8 +874,19 @@ const editorJS = `
       var sy = img.naturalHeight / img.clientHeight;
       var x = el.offsetLeft * sx, y = el.offsetTop * sy;
       var w = el.offsetWidth * sx, h = el.offsetHeight * sy;
+      var payload = {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: ann.number, color: ann.color};
+      if (isFreehand) {
+        // Translate every vertex by the same delta the bounding box
+        // moved — this is the only way a freehand annotation's position
+        // update can happen, since there's no independent "box" to move
+        // the path along with; the path IS the annotation.
+        var dx = x - ann.x, dy = y - ann.y;
+        ann.points = ann.points.map(function(p) { return {x: p.x + dx, y: p.y + dy}; });
+        payload.points = ann.points;
+      }
       ann.x = x; ann.y = y; ann.w = w; ann.h = h;
-      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: ann.number, color: ann.color})
+      renderStroke();
+      api('POST', '/api/annotation/update', payload)
         .catch(function(e) { alert('Update failed: ' + e.message); onStackChanged(); });
     }
 
@@ -882,7 +959,8 @@ const editorJS = `
   // or where to draw the overlay.
   function setupDrawing(el) {
     var armedMode = null;
-    var pending = null; // {mode, x, y, w, h} in on-screen px, relative to imgFrame
+    var pending = null; // {mode, x, y, w, h} in on-screen px, relative to imgFrame — redact/highlight/crop
+    var pendingFreehand = null; // array of {x,y} in the image's natural pixel space, while drawing/adjusting a stroke
     var dragging = null;
 
     function setArmed(mode) {
@@ -892,17 +970,42 @@ const editorJS = `
       el.redactBtn.classList.toggle('armed', mode === 'redact');
       el.highlightBtn.classList.toggle('armed', mode === 'highlight');
       el.cropBtn.classList.toggle('armed', mode === 'crop');
+      el.freehandBtn.classList.toggle('armed', mode === 'freehand');
     }
 
     function updateButtonStates() {
-      el.redactBtn.disabled = !!pending;
-      el.highlightBtn.disabled = !!pending;
-      el.cropBtn.disabled = !!pending;
+      var busy = !!pending || !!pendingFreehand;
+      el.redactBtn.disabled = busy;
+      el.highlightBtn.disabled = busy;
+      el.cropBtn.disabled = busy;
+      el.freehandBtn.disabled = busy;
     }
 
     function framePos(e) {
       var rect = el.imgFrame.getBoundingClientRect();
       return {x: e.clientX - rect.left, y: e.clientY - rect.top};
+    }
+
+    // framePosNatural is framePos already converted into the image's own
+    // pixel space — freehand points are captured directly in that space
+    // (unlike the redact/highlight/crop rectangle, which stays in
+    // on-screen px until Apply) so the live preview's SVG viewBox can
+    // use them with zero further conversion.
+    function framePosNatural(e) {
+      var rect = el.imgFrame.getBoundingClientRect();
+      var sx = el.img.naturalWidth / rect.width;
+      var sy = el.img.naturalHeight / rect.height;
+      return {x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy};
+    }
+
+    function renderFreehandPreview() {
+      if (!pendingFreehand || pendingFreehand.length === 0) {
+        el.freehandPreviewSvg.style.display = 'none';
+        return;
+      }
+      el.freehandPreviewSvg.setAttribute('viewBox', '0 0 ' + el.img.naturalWidth + ' ' + el.img.naturalHeight);
+      el.freehandPreviewSvg.style.display = 'block';
+      el.freehandPreviewPoly.setAttribute('points', pendingFreehand.map(function(p) { return p.x + ',' + p.y; }).join(' '));
     }
 
     function renderOverlay() {
@@ -942,10 +1045,25 @@ const editorJS = `
       if (pending) return;
       setArmed(armedMode === 'crop' ? null : 'crop');
     });
+    el.freehandBtn.addEventListener('click', function() {
+      if (pending || pendingFreehand) return;
+      setArmed(armedMode === 'freehand' ? null : 'freehand');
+    });
 
     el.img.addEventListener('mousedown', function(e) {
-      if (!armedMode || pending) return;
+      if (!armedMode || pending || pendingFreehand) return;
       e.preventDefault();
+      if (armedMode === 'freehand') {
+        // A stroke's extent isn't known ahead of time the way a
+        // rectangle's is, so freehand skips the draw-then-adjust split
+        // entirely: the whole mousedown-to-mouseup gesture *is* the
+        // path, captured directly, with Apply/Cancel appearing only
+        // once the gesture ends.
+        dragging = {type: 'freehand'};
+        pendingFreehand = [framePosNatural(e)];
+        renderFreehandPreview();
+        return;
+      }
       var p = framePos(e);
       dragging = {type: 'draw', startX: p.x, startY: p.y};
       pending = {mode: armedMode, x: p.x, y: p.y, w: 0, h: 0};
@@ -969,7 +1087,22 @@ const editorJS = `
     });
 
     window.addEventListener('mousemove', function(e) {
-      if (!dragging || !pending) return;
+      if (!dragging) return;
+      if (dragging.type === 'freehand') {
+        var np = framePosNatural(e);
+        var last = pendingFreehand[pendingFreehand.length - 1];
+        // Only record a point once the pointer has actually moved a few
+        // natural pixels — keeps the path array a reasonable size
+        // without any visible loss of smoothness (a mousemove stream at
+        // typical polling rates would otherwise record a point every
+        // 1-2px, most of it redundant).
+        if (Math.hypot(np.x - last.x, np.y - last.y) >= 3) {
+          pendingFreehand.push(np);
+          renderFreehandPreview();
+        }
+        return;
+      }
+      if (!pending) return;
       var p = framePos(e);
       if (dragging.type === 'draw') {
         pending.x = Math.min(dragging.startX, p.x);
@@ -996,6 +1129,20 @@ const editorJS = `
 
     window.addEventListener('mouseup', function() {
       if (!dragging) return;
+      if (dragging.type === 'freehand') {
+        dragging = null;
+        if (pendingFreehand && pendingFreehand.length >= 2) {
+          showApplyBar(true);
+          updateButtonStates();
+        } else {
+          // A stray click while armed, same "too small to be
+          // intentional" treatment the rectangle modes give a tiny drag.
+          pendingFreehand = null;
+          renderFreehandPreview();
+          setArmed(null);
+        }
+        return;
+      }
       var wasTinyDraw = dragging.type === 'draw' && pending && (pending.w < 4 || pending.h < 4);
       dragging = null;
       if (wasTinyDraw) {
@@ -1015,6 +1162,18 @@ const editorJS = `
     });
 
     el.applyBtn.addEventListener('click', function() {
+      if (pendingFreehand) {
+        var points = pendingFreehand;
+        apiJSON('POST', '/api/annotation', {index: el.stepIndex, points: points}).then(function(data) {
+          pendingFreehand = null;
+          renderFreehandPreview();
+          setArmed(null);
+          showApplyBar(false);
+          updateButtonStates();
+          stepEditors[el.stepIndex].addAnnotationLocal(data);
+        }).catch(function(e) { alert('Freehand highlight failed: ' + e.message); });
+        return;
+      }
       if (!pending) return;
       var mode = pending.mode;
       var scaleX = el.img.naturalWidth / el.img.clientWidth;
@@ -1051,6 +1210,8 @@ const editorJS = `
 
     el.cancelBtn.addEventListener('click', function() {
       pending = null;
+      pendingFreehand = null;
+      renderFreehandPreview();
       setArmed(null);
       renderOverlay();
       showApplyBar(false);

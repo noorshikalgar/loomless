@@ -250,14 +250,19 @@ func NewHandler(name string) (http.Handler, error) {
 		history.push(body.Index, before)
 		writeStep(w, body.Index)
 	})
+	// /api/annotation creates either a rectangle highlight (Points
+	// omitted) or a freehand stroke (Points given, decision #27) — one
+	// endpoint for both, matching AddAnnotation itself handling both
+	// rather than a parallel /api/annotation/freehand.
 	mux.HandleFunc("POST /api/annotation", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Index int     `json:"index"`
-			X     float64 `json:"x"`
-			Y     float64 `json:"y"`
-			W     float64 `json:"w"`
-			H     float64 `json:"h"`
-			Color string  `json:"color"`
+			Index  int             `json:"index"`
+			X      float64         `json:"x"`
+			Y      float64         `json:"y"`
+			W      float64         `json:"w"`
+			H      float64         `json:"h"`
+			Color  string          `json:"color"`
+			Points []session.Point `json:"points"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -268,7 +273,7 @@ func NewHandler(name string) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		created, _, err := session.AddAnnotation(name, body.Index, body.X, body.Y, body.W, body.H, body.Color)
+		created, _, err := session.AddAnnotation(name, body.Index, body.X, body.Y, body.W, body.H, body.Color, body.Points)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -279,14 +284,15 @@ func NewHandler(name string) (http.Handler, error) {
 	})
 	mux.HandleFunc("POST /api/annotation/update", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Index  int     `json:"index"`
-			ID     int     `json:"id"`
-			X      float64 `json:"x"`
-			Y      float64 `json:"y"`
-			W      float64 `json:"w"`
-			H      float64 `json:"h"`
-			Number int     `json:"number"`
-			Color  string  `json:"color"`
+			Index  int             `json:"index"`
+			ID     int             `json:"id"`
+			X      float64         `json:"x"`
+			Y      float64         `json:"y"`
+			W      float64         `json:"w"`
+			H      float64         `json:"h"`
+			Number int             `json:"number"`
+			Color  string          `json:"color"`
+			Points []session.Point `json:"points"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -297,7 +303,7 @@ func NewHandler(name string) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if _, err := session.UpdateAnnotation(name, body.Index, body.ID, body.X, body.Y, body.W, body.H, body.Number, body.Color); err != nil {
+		if _, err := session.UpdateAnnotation(name, body.Index, body.ID, body.X, body.Y, body.W, body.H, body.Number, body.Color, body.Points); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

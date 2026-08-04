@@ -1580,6 +1580,114 @@ off. A "Clear Crop" button (disabled when there's no crop) removes it.
    dots that were plainly visible in the original — while a different,
    uncropped step's screenshot in the same document was untouched.
 
+## 27. Freehand hand-drawn annotations
+
+Decided 2026-08-04. Every annotation until now was a rectangle — fine for
+"this button" or "this panel," but a rectangle can't point at a specific
+line in a stack trace, trace a diagonal path from a button to the toast
+it produced, or circle an irregularly-shaped region of a screenshot
+without also boxing in a bunch of unrelated pixels around it. Thought
+through from the dev/QA side specifically: the person writing a bug
+report or a QA repro step reaches for a pen gesture instinctively —
+"circle the thing," "draw an arrow from here to there" — and a rectangle
+forces them to either approximate with a box or fall back to a caption
+sentence describing what they'd rather have just drawn. This closes that
+gap without asking them to learn a second annotation tool: freehand is a
+draw mode alongside Redaction/Highlight/Crop in the same toolbar, using
+the same draw → adjust → Apply flow.
+
+**Extends the existing generic `Annotation` type rather than building a
+parallel one** — the same "keep generic" principle decision #18
+established when click-highlight and manual highlight were unified.
+`session.Annotation` gained `Points []Point` (`omitempty`, nil for every
+annotation before this field existed); `X/Y/W/H` remain the source of
+truth for hit-testing, the numbered badge position, and the move/color
+API, but for a freehand annotation they're *derived* — computed once via
+`boundingBox(points)` at creation and recomputed on every move — rather
+than independently settable. `AddAnnotation`/`UpdateAnnotation` both
+take a `points []Point` parameter; when non-nil, the caller's `x,y,w,h`
+arguments are ignored in favor of the computed bounding box. The nil-vs-
+non-nil distinction (not an empty-slice check) is deliberate and rests on
+Go's own JSON semantics: an omitted or `null` `points` field unmarshals
+to a nil slice, while an explicit `"points":[]` unmarshals to a non-nil
+empty one — which is how the backend tells "this is a rectangle
+resize/renumber/recolor request, leave Points alone" apart from "this is
+a freehand move, recompute the bounding box," without needing a separate
+boolean flag on the wire.
+
+**Rendering branches on `len(Points) > 0`, once, in the same per-
+annotation loop `RenderAnnotations` already had** (the same loop decision
+#25 extended for per-annotation color) — a freehand annotation draws its
+stroke via a new `drawPolyline`, a rectangle draws its border via the
+existing `drawRectBorder`; both still get the same numbered badge. Stroke
+rendering deliberately reuses the already-tested `drawFilledCircle`
+primitive — stamping overlapping circles along each segment at
+`radius * 0.5` spacing — rather than writing a dedicated thick-line
+rasterizer, since a stamped-circle stroke was already proven correct
+pixel-by-pixel for the badge and needed no new antialiasing logic.
+
+**Crop rebasing (decision #26) extends to every point, not just the
+bounding box** — `shiftAnnotationsForCrop` now shifts each `Point` by the
+crop's own origin alongside `X/Y`, otherwise a cropped export would show
+the numbered badge in the right place while the actual stroke rendered
+offset from it, silently wrong in a way that's easy to miss on a quick
+look and only obvious once you trace the badge back to its stroke.
+
+**Editor UI**: a "Draw Freehand" toolbar button following the same
+pattern as Crop before it — a new `armedMode`, not a parallel input-
+handling path. While drawing, a live SVG polyline preview traces the
+cursor's path directly in natural pixel space (points are captured via
+`framePosNatural`, the same helper used elsewhere, so there's no
+screen-to-natural conversion needed at Apply time — the raw captured
+points are exactly what gets POSTed). A persisted freehand annotation
+renders as an inline SVG `<polyline>` sized to its own bounding box
+(`viewBox="0 0 w h"`, points expressed relative to the box's own
+origin) rather than a CSS-positioned border, so the annotation element
+itself carries the actual stroke shape, not just a hit box around it.
+
+**Move-only — no resize handles for freehand annotations**, a deliberate
+scope decision rather than an oversight: `commitPosition` for a freehand
+annotation translates every point by the drag delta and resends the
+whole `points` array, which composes cleanly with drag-to-move exactly
+like a rectangle does. Scaling a hand-drawn path from a corner handle,
+by contrast, rarely preserves what made the gesture meaningful in the
+first place — a circle drawn around one line of a stack trace, stretched
+non-uniformly from a corner, stops looking like a circle around that
+line — so rather than ship a resize interaction likely to make strokes
+worse more often than better, this pass ships move-only and leaves
+resize as a possible future addition if it turns out to be wanted.
+
+**Verified:**
+
+1. Unit tests: `internal/session` (`TestBoundingBox` — empty, single
+   point, diagonal, and out-of-order point sets; freehand `Add`/`Update`
+   correctly recompute the bounding box from points and ignore the
+   caller's x/y/w/h; rectangle `Add`/`Update` are unaffected by the
+   freehand code path and never touch `Points`). `internal/capture`
+   (`TestRenderAnnotationsFreehandDrawsAlongThePathNotARectangle` —
+   draws a straight horizontal stroke and checks both that its midpoint
+   is painted *and* that a point below the line, where a rectangle's
+   border would have been, is untouched — specifically distinguishing
+   "drew a stroke" from "drew a rectangle and got lucky"; single-point
+   stroke draws a dot instead of degenerating). `internal/export`
+   (`TestShiftAnnotationsForCropShiftsFreehandPoints` — every point
+   moves with the crop, not just the bounding box).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Live browser verification against a real session: armed "Draw
+   Freehand," dispatched a synthetic 9-point mouse path, confirmed the
+   live SVG preview traced the actual zigzag shape (not a straight line
+   or a box) as points were added; clicked Apply and confirmed via
+   `GET /api/session` that all 9 points persisted with a correctly
+   computed bounding box; dragged the stroke and confirmed via the API
+   response that the bounding box shifted by the same delta as the
+   drag, and that the *first stored point* shifted by that exact same
+   delta with width/height unchanged — confirming pure translation, not
+   a resize-in-disguise. Exported to PDF and rasterized the page with
+   PyMuPDF to look at actual pixels rather than trust the code path: the
+   embedded image shows a genuinely irregular hand-drawn outline, not a
+   rectangle, at the post-move position — the same independent-pixel
+   verification already applied to crop (#26) and color (#25).
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

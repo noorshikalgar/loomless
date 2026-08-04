@@ -308,6 +308,134 @@ func TestClearCropOnUncroppedStepIsANoOp(t *testing.T) {
 	}
 }
 
+func TestBoundingBox(t *testing.T) {
+	cases := []struct {
+		name       string
+		points     []Point
+		x, y, w, h float64
+	}{
+		{"empty", nil, 0, 0, 0, 0},
+		{"single point", []Point{{X: 5, Y: 10}}, 5, 10, 0, 0},
+		{"diagonal", []Point{{X: 0, Y: 0}, {X: 10, Y: 20}}, 0, 0, 10, 20},
+		{"unordered points", []Point{{X: 30, Y: 5}, {X: 10, Y: 40}, {X: 20, Y: 15}}, 10, 5, 20, 35},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x, y, w, h := boundingBox(tc.points)
+			if x != tc.x || y != tc.y || w != tc.w || h != tc.h {
+				t.Errorf("boundingBox(%v) = (%v,%v,%v,%v), want (%v,%v,%v,%v)", tc.points, x, y, w, h, tc.x, tc.y, tc.w, tc.h)
+			}
+		})
+	}
+}
+
+// TestAddAnnotationFreehandComputesBoundingBox confirms a freehand
+// annotation's stored X/Y/W/H always matches its Points, even though the
+// caller passed different (garbage, in this test) x/y/w/h values —
+// AddAnnotation must trust the path over whatever bounding box the
+// caller thought it was.
+func TestAddAnnotationFreehandComputesBoundingBox(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("freehand"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("freehand", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+
+	points := []Point{{X: 10, Y: 10}, {X: 50, Y: 30}, {X: 20, Y: 60}}
+	created, _, err := AddAnnotation("freehand", step.Index, 999, 999, 999, 999, "", points)
+	if err != nil {
+		t.Fatalf("AddAnnotation: %v", err)
+	}
+	if created.X != 10 || created.Y != 10 || created.W != 40 || created.H != 50 {
+		t.Errorf("created bounding box = (%v,%v,%v,%v), want (10,10,40,50) — derived from Points, not the caller's x/y/w/h", created.X, created.Y, created.W, created.H)
+	}
+	if len(created.Points) != 3 {
+		t.Errorf("created.Points has %d points, want 3", len(created.Points))
+	}
+}
+
+func TestAddAnnotationRectangleUnaffectedByFreehandChange(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("rect"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("rect", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	created, _, err := AddAnnotation("rect", step.Index, 5, 15, 100, 60, "", nil)
+	if err != nil {
+		t.Fatalf("AddAnnotation: %v", err)
+	}
+	if created.X != 5 || created.Y != 15 || created.W != 100 || created.H != 60 {
+		t.Errorf("rectangle annotation = (%v,%v,%v,%v), want the caller's own (5,15,100,60) unchanged", created.X, created.Y, created.W, created.H)
+	}
+	if created.Points != nil {
+		t.Errorf("rectangle annotation has non-nil Points = %v, want nil", created.Points)
+	}
+}
+
+// TestUpdateAnnotationFreehandMoveRecomputesBoundingBox confirms moving
+// a freehand stroke (sending a new Points array) recomputes X/Y/W/H from
+// the new path — the two must never be allowed to drift apart.
+func TestUpdateAnnotationFreehandMoveRecomputesBoundingBox(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("movefreehand"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("movefreehand", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	created, _, err := AddAnnotation("movefreehand", step.Index, 0, 0, 0, 0, "", []Point{{X: 0, Y: 0}, {X: 10, Y: 10}})
+	if err != nil {
+		t.Fatalf("AddAnnotation: %v", err)
+	}
+
+	moved := []Point{{X: 100, Y: 100}, {X: 110, Y: 110}}
+	s, err := UpdateAnnotation("movefreehand", step.Index, created.ID, 0, 0, 0, 0, created.Number, "", moved)
+	if err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+	got := s.Steps[0].Annotations[0]
+	if got.X != 100 || got.Y != 100 || got.W != 10 || got.H != 10 {
+		t.Errorf("moved bounding box = (%v,%v,%v,%v), want (100,100,10,10)", got.X, got.Y, got.W, got.H)
+	}
+}
+
+// TestUpdateAnnotationRectangleDoesNotTouchPoints confirms a plain
+// rectangle move/resize (points == nil) leaves Points alone — the nil
+// vs. non-nil distinction is how UpdateAnnotation tells "just resize the
+// rectangle" apart from "replace the freehand path."
+func TestUpdateAnnotationRectangleDoesNotTouchPoints(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("rectmove"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("rectmove", "note", "App", "Title", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	created, _, err := AddAnnotation("rectmove", step.Index, 0, 0, 10, 10, "", nil)
+	if err != nil {
+		t.Fatalf("AddAnnotation: %v", err)
+	}
+	s, err := UpdateAnnotation("rectmove", step.Index, created.ID, 5, 5, 20, 20, created.Number, "", nil)
+	if err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+	got := s.Steps[0].Annotations[0]
+	if got.X != 5 || got.Y != 5 || got.W != 20 || got.H != 20 {
+		t.Errorf("resized rectangle = (%v,%v,%v,%v), want (5,5,20,20)", got.X, got.Y, got.W, got.H)
+	}
+	if got.Points != nil {
+		t.Errorf("rectangle update set Points = %v, want still nil", got.Points)
+	}
+}
+
 func TestVisibleSteps(t *testing.T) {
 	base := func() Session {
 		return Session{

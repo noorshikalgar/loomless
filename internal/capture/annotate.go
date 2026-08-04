@@ -33,6 +33,7 @@ const DefaultAnnotationColor = "#ff3b30"
 const (
 	annotationBorderThickness = 3.0
 	annotationBadgeRadius     = 11.0
+	freehandStrokeThickness   = 4.0
 )
 
 // Annotation is the subset of session.Annotation this package needs —
@@ -44,6 +45,18 @@ type Annotation struct {
 	X, Y   float64
 	W, H   float64
 	Color  string // "#rrggbb", or "" for the default (see parseAnnotationColor)
+	// Points, when non-empty, makes this a freehand stroke drawn as a
+	// connected path instead of a rectangle outline — X/Y/W/H is still
+	// its bounding box, used for the badge's position exactly like a
+	// rectangle annotation's.
+	Points []Point
+}
+
+// Point mirrors session.Point — duplicated for the same reason
+// Annotation itself is (see above): avoiding a capture<->session import
+// cycle.
+type Point struct {
+	X, Y float64
 }
 
 // parseAnnotationColor turns a "#rrggbb" (or "rrggbb", case-insensitive)
@@ -104,7 +117,11 @@ func RenderAnnotations(pngData []byte, annotations []Annotation) ([]byte, error)
 
 	for _, a := range annotations {
 		c := parseAnnotationColor(a.Color)
-		drawRectBorder(rgba, a.X, a.Y, a.X+a.W, a.Y+a.H, annotationBorderThickness, c)
+		if len(a.Points) > 0 {
+			drawPolyline(rgba, a.Points, freehandStrokeThickness, c)
+		} else {
+			drawRectBorder(rgba, a.X, a.Y, a.X+a.W, a.Y+a.H, annotationBorderThickness, c)
+		}
 		drawFilledCircle(rgba, a.X, a.Y, annotationBadgeRadius, c)
 		drawCenteredNumber(rgba, a.X, a.Y, a.Number)
 	}
@@ -344,6 +361,36 @@ func drawFilledCircle(img *image.RGBA, cx, cy, r float64, c color.RGBA) {
 			if math.Hypot(float64(x)-cx, float64(y)-cy) <= r {
 				img.Set(x, y, c)
 			}
+		}
+	}
+}
+
+// drawPolyline draws a connected, thick, round-jointed stroke through
+// points — a freehand annotation's path. Rather than a dedicated
+// thick-line rasterizer, this stamps a filled circle (drawFilledCircle,
+// already correct and bounds-safe) at closely-spaced steps along each
+// segment; consecutive circles overlap enough to read as one continuous
+// stroke with naturally rounded joints at every vertex, for less new
+// code than a proper polygon-based thick line and no visible difference
+// at this stroke width.
+func drawPolyline(img *image.RGBA, points []Point, thickness float64, c color.RGBA) {
+	r := thickness / 2
+	if len(points) == 1 {
+		drawFilledCircle(img, points[0].X, points[0].Y, r, c)
+		return
+	}
+	for i := 0; i < len(points)-1; i++ {
+		a, b := points[i], points[i+1]
+		dist := math.Hypot(b.X-a.X, b.Y-a.Y)
+		// Half-radius spacing keeps consecutive stamps overlapping
+		// enough to look like a solid stroke rather than a dotted line.
+		steps := int(math.Ceil(dist / (r * 0.5)))
+		if steps < 1 {
+			steps = 1
+		}
+		for s := 0; s <= steps; s++ {
+			t := float64(s) / float64(steps)
+			drawFilledCircle(img, a.X+(b.X-a.X)*t, a.Y+(b.Y-a.Y)*t, r, c)
 		}
 	}
 }

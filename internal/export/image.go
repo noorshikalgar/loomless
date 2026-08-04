@@ -34,7 +34,18 @@ func stepHeading(step session.Step, position int) string {
 func toCaptureAnnotations(anns []session.Annotation) []capture.Annotation {
 	out := make([]capture.Annotation, len(anns))
 	for i, a := range anns {
-		out[i] = capture.Annotation{Number: a.Number, X: a.X, Y: a.Y, W: a.W, H: a.H, Color: a.Color}
+		out[i] = capture.Annotation{Number: a.Number, X: a.X, Y: a.Y, W: a.W, H: a.H, Color: a.Color, Points: toCapturePoints(a.Points)}
+	}
+	return out
+}
+
+func toCapturePoints(points []session.Point) []capture.Point {
+	if points == nil {
+		return nil
+	}
+	out := make([]capture.Point, len(points))
+	for i, p := range points {
+		out[i] = capture.Point{X: p.X, Y: p.Y}
 	}
 	return out
 }
@@ -87,6 +98,13 @@ func shiftAnnotationsForCrop(anns []session.Annotation, crop session.CropRect) [
 	for i, a := range anns {
 		a.X -= crop.X
 		a.Y -= crop.Y
+		if len(a.Points) > 0 {
+			pts := make([]session.Point, len(a.Points))
+			for j, p := range a.Points {
+				pts[j] = session.Point{X: p.X - crop.X, Y: p.Y - crop.Y}
+			}
+			a.Points = pts
+		}
 		shifted[i] = a
 	}
 	return shifted

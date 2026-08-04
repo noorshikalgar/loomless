@@ -105,6 +105,44 @@ type Annotation struct {
 	// omitempty keeps old session.json files loading as the same
 	// visible color they always rendered, not an unset/invalid one.
 	Color string `json:"color,omitempty"`
+	// Points, when non-empty, makes this a freehand stroke instead of a
+	// rectangle highlight — X/Y/W/H still hold the stroke's bounding box
+	// (recomputed from Points on every create/move, via boundingBox), so
+	// every existing consumer of an annotation's position (the badge,
+	// crop's coordinate-shifting, EditLog's rect summaries) keeps working
+	// unchanged for both kinds without a type switch. A rectangle
+	// annotation's Points is always empty — the two kinds share one list
+	// (one ID space, one numbering, one undo history) rather than being
+	// separate features, the same "keep it generic" reasoning decision
+	// #18 already established for the click-ring vs. manual highlight.
+	Points []Point `json:"points,omitempty"`
+}
+
+// Point is one vertex of a freehand annotation's path, in the image's
+// own pixel coordinates.
+type Point struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// boundingBox returns the smallest rectangle containing every point —
+// used to keep a freehand annotation's X/Y/W/H in sync with its Points
+// whenever the path is created or moved, so every place that already
+// reads an annotation's position/size doesn't need to know freehand
+// annotations exist at all.
+func boundingBox(points []Point) (x, y, w, h float64) {
+	if len(points) == 0 {
+		return 0, 0, 0, 0
+	}
+	minX, minY := points[0].X, points[0].Y
+	maxX, maxY := points[0].X, points[0].Y
+	for _, p := range points[1:] {
+		minX = min(minX, p.X)
+		minY = min(minY, p.Y)
+		maxX = max(maxX, p.X)
+		maxY = max(maxY, p.Y)
+	}
+	return minX, minY, maxX - minX, maxY - minY
 }
 
 // Session is one recording: a named, ordered sequence of steps.
@@ -859,14 +897,20 @@ func findStep(s *Session, stepIndex int) (*Step, error) {
 // AddAnnotation reloads the named session, appends a new numbered
 // Annotation to a step (auto-numbered one past the highest existing
 // number on that step — freely renumbered afterward via
-// UpdateAnnotation), logs the change, and saves. Used by both the click
-// daemon's automatic ring and the editor's manually-drawn highlights —
-// see decision #18. color is a "#rrggbb" hex string, or "" for the
-// default highlight color. Returns the created Annotation directly (not
-// just buried in the returned Session) so a caller like the editor's API
-// can hand it straight back to the client without making the client
-// guess which entry in the step's list is the new one.
-func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string) (Annotation, *Session, error) {
+// UpdateAnnotation), logs the change, and saves. Used by the click
+// daemon's automatic ring, the editor's manually-drawn rectangle
+// highlights, and freehand strokes — see decision #18 (generic
+// annotations) and decision #27 (freehand joining the same list). color
+// is a "#rrggbb" hex string, or "" for the default highlight color.
+// points is nil for a rectangle annotation (x/y/w/h are used as given);
+// non-nil makes this a freehand stroke, and x/y/w/h are ignored in favor
+// of the path's own bounding box (see boundingBox) — the two are never
+// allowed to disagree about an annotation's position. Returns the
+// created Annotation directly (not just buried in the returned Session)
+// so a caller like the editor's API can hand it straight back to the
+// client without making the client guess which entry in the step's list
+// is the new one.
+func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string, points []Point) (Annotation, *Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
 		return Annotation{}, nil, err
@@ -874,6 +918,10 @@ func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string)
 	target, err := findStep(s, stepIndex)
 	if err != nil {
 		return Annotation{}, nil, err
+	}
+
+	if points != nil {
+		x, y, w, h = boundingBox(points)
 	}
 
 	nextID, nextNumber := 1, 1
@@ -885,7 +933,7 @@ func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string)
 			nextNumber = a.Number + 1
 		}
 	}
-	created := Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h, Color: color}
+	created := Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h, Color: color, Points: points}
 	target.Annotations = append(target.Annotations, created)
 
 	s.EditLog = append(s.EditLog, EditEntry{
@@ -978,8 +1026,14 @@ func ReorderAnnotations(name string, stepIndex int, newOrder []int) (*Session, e
 // annotation's position, size, display number, and color — identified by
 // its stable ID, which never changes, not by its position in the list or
 // its (freely reassignable) Number. color is a "#rrggbb" hex string, or
-// "" for the default highlight color.
-func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float64, number int, color string) (*Session, error) {
+// "" for the default highlight color. points is nil for every update
+// that isn't moving a freehand stroke (rectangle resize/move, renumber,
+// recolor — x/y/w/h are used as given); non-nil replaces the stroke's
+// path and recomputes x/y/w/h from it via boundingBox, ignoring the
+// x/y/w/h arguments, for the same reason AddAnnotation does — a
+// freehand annotation's bounding box and its path must never be allowed
+// to disagree.
+func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float64, number int, color string, points []Point) (*Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
 		return nil, err
@@ -987,6 +1041,10 @@ func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float
 	target, err := findStep(s, stepIndex)
 	if err != nil {
 		return nil, err
+	}
+
+	if points != nil {
+		x, y, w, h = boundingBox(points)
 	}
 
 	var old Annotation
@@ -998,6 +1056,9 @@ func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float
 			target.Annotations[i].W, target.Annotations[i].H = w, h
 			target.Annotations[i].Number = number
 			target.Annotations[i].Color = color
+			if points != nil {
+				target.Annotations[i].Points = points
+			}
 			found = true
 			break
 		}
