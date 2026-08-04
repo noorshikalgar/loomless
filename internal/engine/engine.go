@@ -78,15 +78,35 @@ func StartRecording(name string, highlightClicks bool) (dir string, watching boo
 // StopRecording halts the click daemon and idle watchdog (if running) for
 // the current session and marks it finished.
 func StopRecording() (*session.Session, error) {
-	s, dir, err := session.Current()
+	s, _, err := session.Current()
+	if err != nil {
+		return nil, err
+	}
+	return stopRecordingNamed(s.Name)
+}
+
+// StopRecordingNamed is StopRecording for an arbitrary session by name,
+// rather than only the single global "current" one — the TUI's
+// per-session stop action needs this, since the session a user has
+// selected in a list isn't necessarily the one `story record start` most
+// recently marked current. Safe to call regardless of which session (if
+// any) is current: session.Session.Stop only clears the "current"
+// pointer when it's actually pointing at the session being stopped.
+func StopRecordingNamed(name string) (*session.Session, error) {
+	return stopRecordingNamed(name)
+}
+
+func stopRecordingNamed(name string) (*session.Session, error) {
+	dir, err := session.Dir(name)
 	if err != nil {
 		return nil, err
 	}
 	stopClickDaemon(dir)
 	stopIdleWatchdog(dir)
 
-	// Reload: the daemon may have appended steps after our snapshot above.
-	s, dir, err = session.Load(s.Name)
+	// Reload: the daemon may have appended steps after stopClickDaemon
+	// requested it shut down but before it actually finished doing so.
+	s, dir, err := session.Load(name)
 	if err != nil {
 		return nil, err
 	}

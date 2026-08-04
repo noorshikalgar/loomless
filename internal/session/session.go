@@ -260,6 +260,70 @@ func Load(name string) (*Session, string, error) {
 	return &s, dir, nil
 }
 
+// Rename changes a session's on-disk name — the session identity itself
+// (folder name, Session.Name, and the "current" pointer if it was
+// pointing at this session), distinct from EditTitle, which only
+// overrides one step's display heading.
+//
+// A session still actively recording (StoppedAt == nil) can't be safely
+// renamed: the click daemon (internal/engine.RunClickDaemon) was started
+// with, and holds in memory for its whole lifetime, the name it was
+// given — it has no way to learn the name changed, so every subsequent
+// click would try to load a directory that no longer exists at that
+// path. Rejected outright rather than left as a silent landmine; the
+// caller needs to stop the recording first.
+func Rename(oldName, newName string) (*Session, error) {
+	if newName == oldName {
+		// Renaming to the same name is a no-op, not an error, and
+		// doesn't need the recording-state check below.
+		s, _, err := Load(oldName)
+		return s, err
+	}
+	if newName == "" || newName == "." || newName == ".." || strings.ContainsAny(newName, "/\\") {
+		return nil, fmt.Errorf("invalid session name %q", newName)
+	}
+
+	s, oldDir, err := Load(oldName)
+	if err != nil {
+		return nil, err
+	}
+	if s.StoppedAt == nil {
+		return nil, fmt.Errorf("session %q is still recording — stop it before renaming", oldName)
+	}
+
+	newDir, err := Dir(newName)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return nil, fmt.Errorf("a session named %q already exists", newName)
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	// Checked before the directory move below, not after: once oldDir is
+	// gone, Current() can no longer load it to compare names against.
+	wasCurrent := false
+	if cur, _, err := Current(); err == nil && cur.Name == oldName {
+		wasCurrent = true
+	}
+
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return nil, fmt.Errorf("rename session directory: %w", err)
+	}
+	s.Name = newName
+	if err := save(newDir, s); err != nil {
+		return nil, err
+	}
+
+	if wasCurrent {
+		if err := setCurrent(newName); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
 // Current returns the session currently marked active via "record start",
 // for commands that operate on "the session in progress" without a name.
 func Current() (*Session, string, error) {
@@ -442,14 +506,25 @@ func truncateOutput(output string, headLines, tailLines int) string {
 	return fmt.Sprintf("%s\n\n… %d lines omitted (see full output file) …\n\n%s", head, omitted, tail)
 }
 
-// Stop marks the session finished and clears the "current session" pointer.
+// Stop marks the session finished, and clears the "current session"
+// pointer only if it was actually pointing at this session — stopping
+// session A must never blow away session B's "current" marker just
+// because B happens to be the live one at the time. That distinction
+// didn't matter while the only caller (engine.StopRecording) always
+// operated via Current() itself, guaranteeing a match; it does matter
+// once a session can be stopped by name (engine.StopRecordingNamed),
+// where the target and the current session are no longer guaranteed to
+// be the same one.
 func (s *Session) Stop(dir string) error {
 	now := time.Now()
 	s.StoppedAt = &now
 	if err := save(dir, s); err != nil {
 		return err
 	}
-	return clearCurrent()
+	if cur, _, err := Current(); err == nil && cur.Name == s.Name {
+		return clearCurrent()
+	}
+	return nil
 }
 
 // VisibleSteps returns steps in display order with hidden ones excluded —

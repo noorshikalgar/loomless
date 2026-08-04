@@ -1271,6 +1271,128 @@ window.
    an unreaped child, a mistake the first pass at this test made and
    quietly reported a false hang until corrected).
 
+## 24. TUI: stop editor, create/rename/stop-recording sessions, polished footer
+
+Decided 2026-08-04, direct feedback on decision #23's first pass: *"no
+way to stop the running server, no way to create a new session, no way
+to edit the session name"* plus a request to *"add a bottom status bar
+… show the status shortcuts running status etc … polish TUI."* All four
+close real gaps in the initial session-management dashboard rather than
+adding new surface area — the first pass could show sessions and jump
+into them, but nothing to close what it opened, start what it managed,
+or fix a session's own identity.
+
+**Two backend correctness fixes, added first because everything else
+depends on them being right:**
+
+1. `session.Session.Stop` previously cleared the global "current session"
+   pointer *unconditionally*. That was harmless while the only caller
+   (`engine.StopRecording`) always resolved its target *through*
+   `session.Current()` — target and current were the same session by
+   construction. Once a session can be stopped *by name* (next point),
+   that guarantee is gone: stopping session A while B is actually current
+   would have silently clobbered B's pointer, breaking `story record
+   stop`/`story step` for a session nobody asked to touch. Fixed to only
+   clear when `Current().Name` matches the session being stopped.
+2. New `engine.StopRecordingNamed(name)` — `StopRecording` restricted to
+   the single global "current" session was never going to work for a TUI
+   list, where the selected item and "whatever was most recently started"
+   are frequently different sessions. Refactored `StopRecording` itself
+   to share the same underlying by-name logic, rather than duplicating
+   the stop-daemon/reload/mark-stopped sequence.
+
+**New `session.Rename(oldName, newName)`.** Distinct from decision #20's
+`EditTitle` (which only overrides one step's display heading) — this
+changes the session's actual identity: the on-disk directory, `Session
+.Name` inside `session.json`, and the "current" pointer if it was
+pointing at the renamed session (checked *before* the directory move, not
+after — `Current()` can't resolve a directory that's already gone,
+caught by a test that initially failed for exactly this reason).
+Deliberately rejects renaming a session that's still recording
+(`StoppedAt == nil`): `RunClickDaemon` is a relaunched, detached process
+that was started with — and holds in memory for its entire lifetime — the
+name it was given, with no channel to learn a rename happened; every
+subsequent click would try to load a directory that no longer exists at
+that path. Rather than leave that as a silent landmine, it's a rejected
+operation with a message telling the user to stop the recording first.
+Renaming to the session's own current name is treated as a no-op success
+(even while still recording, since nothing structurally changes), not an
+error.
+
+**TUI wiring** (`cmd/story/tui.go`): new keys `x` (stop the selected
+session's running editor server — the literal gap reported), `S` (stop
+recording, via `StopRecordingNamed`), `n` (new session), `c` (rename). `n`
+and `c` share one `bubbles/textinput`-based prompt (`inputPurpose`
+distinguishes the two — new session starts blank, rename starts
+pre-filled with the current name and cursor at the end) with its own
+small mode: while a prompt is open, keystrokes go to the text field
+instead of being read as the list's global shortcuts, `Enter` submits,
+`Esc` cancels without side effects.
+
+**Footer, rebuilt as two always-present lines** rather than the one
+sometimes-shown-sometimes-not line from decision #23 (list height is
+reserved for exactly two footer lines now, so it never has to resize
+between modes): a status/prompt line (defaults, when nothing more
+specific just happened, to live counts — `N session(s) · M editor(s)
+running · K recording` — satisfying "show the status … running status"
+directly) and a persistent, contextual shortcut legend (the full action
+set in list mode, just `enter confirm · esc cancel` while a prompt is
+open).
+
+**`engine.StartRecording` became a package-level `var startRecording`**
+in `cmd/story/tui.go` (same reasoning as `openBrowser` in decision #23):
+it's the one action that forks a real background OS process. A test
+calling the real thing would relaunch `os.Executable()` — which, inside
+`go test`, *is the compiled test binary*, not the `story` CLI — with
+args like `__click-daemon`, an unpredictable thing to do in a unit test
+(confirmed by first writing the test against the real function, watching
+it actually spawn and querying `ps` for what showed up, then switching to
+the injectable var once that risk was visible directly rather than
+theoretically).
+
+**Verified:**
+
+1. Unit tests: `session_test.go` (`Stop` only clears a matching current
+   pointer, not another session's — with an explicit two-session test
+   proving the negative case; `Rename` moves the directory and updates
+   `Name`, rejects a still-recording session, rejects an existing target
+   name, treats same-name as a no-op, and follows the "current" pointer
+   — this last case is what caught the check-after-move ordering bug
+   above), `engine_test.go` (`StopRecordingNamed` stops session A without
+   disturbing session B's "current" status, and confirms `StopRecording`
+   still works normally afterward), `cmd/story/tui_test.go` (stop-editor
+   actually closes the server — confirmed via a real HTTP request before
+   and after, not just the map entry disappearing; the full new-session
+   prompt-to-disk flow via the injected `startRecording` fake, including
+   the `watching=false` warning path; the rename flow confirming the
+   prompt pre-fills correctly and the rename actually lands on disk;
+   stop-recording marking `StoppedAt` and erroring cleanly on an
+   already-stopped session).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Full interactive re-verification against the real compiled binary
+   through the same pty+pyte harness as decision #23, this time driving
+   every new key: `e` then `x` (opened, confirmed a real `200` from the
+   server, stopped it, confirmed the same URL now unreachable); `n` then
+   typing a name then `Enter` (the new session appeared at the top of the
+   list — sort is by `StartedAt` descending — marked `● recording`, footer
+   showed `1 recording`); `S` on it (marker disappeared, footer recount
+   updated); `c` (prompt pre-filled with the exact current name,
+   confirmed character-for-character, not just non-empty), `ctrl+u` to
+   clear (bubbles/textinput's own binding) then retyping and `Enter`
+   (session renamed on disk, confirmed via a fresh `session.Load` on the
+   new name and the absence of the old one). One real bug surfaced and
+   fixed *in the test harness itself*, not the product, worth recording
+   since it produced a very convincing false alarm: the first version of
+   the pty-polling helper had a stray `else: break` that abandoned the
+   read loop after a single 200ms `select()` timeout instead of polling
+   for the full requested duration — since `StartRecording`'s real
+   background-process spawn plus its internal 300ms daemon-health check
+   routinely takes longer than 200ms, every "after Enter" screenshot was
+   captured mid-flight, showing the prompt still open even though the
+   session had, in fact, already been created correctly on disk. Fixing
+   the test harness (not the product) made the real behavior visible and
+   correct.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

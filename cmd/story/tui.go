@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -14,14 +16,21 @@ import (
 	"github.com/noorshikalgar/story/internal/session"
 )
 
+// startRecording is a package-level var (not a direct call to
+// engine.StartRecording), same reasoning as openBrowser: it's the one
+// TUI action that spawns a real background OS process (the click
+// daemon), which tests must be able to substitute away rather than
+// actually forking one on every "create a new session" test run.
+var startRecording = engine.StartRecording
+
 // cmdTUI is the "story tui" entrypoint — a session-management dashboard
-// (list sessions, jump into the local web editor, export, refresh)
-// alongside the existing scriptable CLI/MCP surface, not a replacement
-// for either. Decision #14 chose a browser-based editor over a TUI
-// specifically for the visual editing work (redaction, annotations —
-// things that need a canvas); that reasoning doesn't apply to session
-// *management*, which is exactly what a fast, keyboard-driven list is
-// good at. See decision #23.
+// (list sessions, start/stop recordings, jump into the local web editor,
+// export, rename, refresh) alongside the existing scriptable CLI/MCP
+// surface, not a replacement for either. Decision #14 chose a
+// browser-based editor over a TUI specifically for the visual editing
+// work (redaction, annotations — things that need a canvas); that
+// reasoning doesn't apply to session *management*, which is exactly what
+// a fast, keyboard-driven list is good at. See decisions #23/#24.
 func cmdTUI(args []string) error {
 	m, err := newTUIModel()
 	if err != nil {
@@ -60,12 +69,27 @@ type runningEditor struct {
 	server *http.Server
 }
 
+// inputPurpose distinguishes what a currently-open text prompt is for,
+// since "new session" and "rename session" share the same one-line
+// textinput UI but submit to different places.
+type inputPurpose int
+
+const (
+	inputNone inputPurpose = iota
+	inputNewSession
+	inputRenameSession
+)
+
 type tuiModel struct {
 	list          list.Model
 	editors       map[string]*runningEditor
 	status        string
 	statusIsError bool
 	width, height int
+
+	textInput    textinput.Model
+	inputPurpose inputPurpose
+	renameTarget string // session being renamed, captured when the prompt opens (the list's selection can't be trusted to still point at it once the name changes)
 }
 
 func newTUIModel() (tuiModel, error) {
@@ -76,7 +100,9 @@ func newTUIModel() (tuiModel, error) {
 	l := list.New(sessionItems(sessions), list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Story sessions"
 	l.SetStatusBarItemName("session", "sessions")
-	return tuiModel{list: l, editors: make(map[string]*runningEditor)}, nil
+	ti := textinput.New()
+	ti.CharLimit = 64
+	return tuiModel{list: l, editors: make(map[string]*runningEditor), textInput: ti}, nil
 }
 
 func sessionItems(sessions []session.Session) []list.Item {
@@ -93,11 +119,27 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		// Reserve one line for the status bar below the list.
-		m.list.SetSize(msg.Width, msg.Height-1)
+		// Reserve two lines for the footer below the list: a status/
+		// prompt line and a shortcut-legend line, always both present so
+		// the list's height never has to shift between modes.
+		m.list.SetSize(msg.Width, msg.Height-2)
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.inputPurpose != inputNone {
+			switch msg.String() {
+			case "enter":
+				m.submitInput()
+				return m, nil
+			case "esc":
+				m.cancelInput()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.textInput, cmd = m.textInput.Update(msg)
+			return m, cmd
+		}
+
 		if m.list.FilterState() == list.Filtering {
 			break
 		}
@@ -108,6 +150,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter", "e":
 			m.openEditor()
 			return m, nil
+		case "x":
+			m.stopEditor()
+			return m, nil
+		case "S":
+			m.stopRecording()
+			return m, nil
+		case "n":
+			return m, m.startInput(inputNewSession)
+		case "c":
+			return m, m.startInput(inputRenameSession)
 		case "m":
 			m.export("md")
 			return m, nil
@@ -128,18 +180,43 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+var (
+	statusOKStyle    = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("242"))
+	statusErrStyle   = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("196"))
+	legendStyle      = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("59"))
+	promptLabelStyle = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("228")).Bold(true)
+)
+
+const (
+	listLegend  = "enter/e edit · x stop editor · S stop rec · n new · c rename · m/p/s export · r refresh · q quit"
+	inputLegend = "enter confirm · esc cancel"
+)
+
 func (m tuiModel) View() string {
-	statusStyle := lipgloss.NewStyle().Padding(0, 1)
-	if m.statusIsError {
-		statusStyle = statusStyle.Foreground(lipgloss.Color("196"))
-	} else {
-		statusStyle = statusStyle.Foreground(lipgloss.Color("242"))
+	if m.inputPurpose != inputNone {
+		label := "New session name:"
+		if m.inputPurpose == inputRenameSession {
+			label = "Rename " + m.renameTarget + " to:"
+		}
+		prompt := promptLabelStyle.Render(label) + " " + m.textInput.View()
+		return m.list.View() + "\n" + prompt + "\n" + legendStyle.Render(inputLegend)
 	}
+
 	status := m.status
-	if status == "" {
-		status = "enter/e edit · m/p/s export md/pdf/slides · r refresh · q quit"
+	style := statusOKStyle
+	if m.statusIsError {
+		style = statusErrStyle
 	}
-	return m.list.View() + "\n" + statusStyle.Render(status)
+	if status == "" {
+		running := 0
+		for _, i := range m.list.Items() {
+			if it, ok := i.(sessionItem); ok && it.s.StoppedAt == nil {
+				running++
+			}
+		}
+		status = fmt.Sprintf("%d session(s) · %d editor(s) running · %d recording", len(m.list.Items()), len(m.editors), running)
+	}
+	return m.list.View() + "\n" + style.Render(status) + "\n" + legendStyle.Render(listLegend)
 }
 
 func (m *tuiModel) selected() (session.Session, bool) {
@@ -153,6 +230,68 @@ func (m *tuiModel) selected() (session.Session, bool) {
 func (m *tuiModel) setStatus(text string, isError bool) {
 	m.status = text
 	m.statusIsError = isError
+}
+
+// startInput opens the one-line text prompt for either creating a new
+// session or renaming the selected one — same widget, different
+// pre-filled value and submit target (see submitInput). Renaming with
+// nothing selected (an empty list) is simply a no-op; creating a session
+// never needed a selection to begin with.
+func (m *tuiModel) startInput(purpose inputPurpose) tea.Cmd {
+	if purpose == inputRenameSession {
+		sel, ok := m.selected()
+		if !ok {
+			return nil
+		}
+		m.renameTarget = sel.Name
+		m.textInput.SetValue(sel.Name)
+		m.textInput.CursorEnd()
+	} else {
+		m.textInput.SetValue("")
+	}
+	m.inputPurpose = purpose
+	return m.textInput.Focus()
+}
+
+func (m *tuiModel) cancelInput() {
+	m.inputPurpose = inputNone
+	m.renameTarget = ""
+	m.textInput.Blur()
+}
+
+func (m *tuiModel) submitInput() {
+	name := strings.TrimSpace(m.textInput.Value())
+	purpose := m.inputPurpose
+	target := m.renameTarget
+	m.cancelInput()
+
+	if name == "" {
+		m.setStatus("Session name cannot be empty", true)
+		return
+	}
+
+	switch purpose {
+	case inputNewSession:
+		_, watching, warning, err := startRecording(name, false)
+		if err != nil {
+			m.setStatus(err.Error(), true)
+			return
+		}
+		m.refresh()
+		if !watching {
+			m.setStatus("Created "+name+" (manual capture only: "+warning+")", true)
+			return
+		}
+		m.setStatus("Recording "+name, false)
+
+	case inputRenameSession:
+		if _, err := session.Rename(target, name); err != nil {
+			m.setStatus(err.Error(), true)
+			return
+		}
+		m.refresh()
+		m.setStatus("Renamed "+target+" to "+name, false)
+	}
 }
 
 // openEditor starts (or reuses) the selected session's local web editor.
@@ -188,16 +327,55 @@ func (m *tuiModel) openEditor() {
 	}
 	url := fmt.Sprintf("http://%s/", ln.Addr().String())
 	srv := &http.Server{Handler: handler}
-	go srv.Serve(ln) //nolint:errcheck // srv.Close() on quit/exit always returns http.ErrServerClosed, nothing actionable
+	go srv.Serve(ln) //nolint:errcheck // srv.Close() on quit/stopEditor always returns http.ErrServerClosed, nothing actionable
 	m.editors[name] = &runningEditor{url: url, server: srv}
 	openBrowser(url)
 	m.setStatus("Editor for "+name+" running at "+url, false)
+}
+
+// stopEditor closes the selected session's running editor server, if
+// any — the counterpart to openEditor that was previously only possible
+// by quitting the whole TUI.
+func (m *tuiModel) stopEditor() {
+	sel, ok := m.selected()
+	if !ok {
+		return
+	}
+	name := sel.Name
+	e, ok := m.editors[name]
+	if !ok {
+		m.setStatus("No running editor for "+name, true)
+		return
+	}
+	e.server.Close()
+	delete(m.editors, name)
+	m.setStatus("Stopped editor for "+name, false)
 }
 
 func (m *tuiModel) closeAllEditors() {
 	for _, e := range m.editors {
 		e.server.Close()
 	}
+}
+
+// stopRecording ends the selected session's recording (click daemon +
+// idle watchdog) regardless of whether it's the single global "current"
+// session engine.StopRecording targets — see engine.StopRecordingNamed.
+func (m *tuiModel) stopRecording() {
+	sel, ok := m.selected()
+	if !ok {
+		return
+	}
+	if sel.StoppedAt != nil {
+		m.setStatus(sel.Name+" is not recording", true)
+		return
+	}
+	if _, err := engine.StopRecordingNamed(sel.Name); err != nil {
+		m.setStatus(err.Error(), true)
+		return
+	}
+	m.refresh()
+	m.setStatus("Stopped recording "+sel.Name, false)
 }
 
 // export renders the selected session in the given format synchronously
@@ -228,6 +406,11 @@ func (m *tuiModel) export(format string) {
 	m.setStatus("Exported to "+path, false)
 }
 
+// refresh re-lists sessions from disk and clears any prior status
+// message — the default (empty-status) view already shows live session/
+// editor/recording counts, so a bare refresh needs no separate
+// confirmation text of its own. Callers that follow refresh() with their
+// own setStatus (export, rename, stop) simply overwrite this.
 func (m *tuiModel) refresh() {
 	sessions, err := session.List()
 	if err != nil {
@@ -235,5 +418,5 @@ func (m *tuiModel) refresh() {
 		return
 	}
 	m.list.SetItems(sessionItems(sessions))
-	m.setStatus("Refreshed ("+fmt.Sprint(len(sessions))+" session(s))", false)
+	m.setStatus("", false)
 }
