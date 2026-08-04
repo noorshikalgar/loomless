@@ -11,6 +11,13 @@ func indexHTML(name string) string {
 <h1>` + html.EscapeString(name) + `</h1>
 <p class="hint">Reorder, hide, or edit captions, then export from the CLI/MCP as usual — changes are saved immediately.</p>
 <div id="steps"></div>
+<div class="editor-modal-overlay" id="editorModalOverlay">
+  <div class="editor-modal">
+    <button class="editor-modal-close" id="editorModalClose">&times; Close</button>
+    <div class="editor-modal-label" id="editorModalLabel"></div>
+    <div class="editor-modal-body" id="editorModalBody"></div>
+  </div>
+</div>
 <script>` + editorJS + `</script>
 </body></html>
 `
@@ -126,6 +133,24 @@ const editorCSS = `
   .window-line input.window-app-input { font-weight: 600; color: #8ab4ff; width: 8rem; }
   .window-line input.window-title-input { font-weight: normal; color: #ccc; flex: 1; min-width: 0; }
   .window-line-sep { color: #666; }
+  /* Focused/"modal" view for an image editor — see the openFocusView
+     comment in editorJS for why this reparents the existing imgWrap
+     rather than building a second editor. Fixed positioning means this
+     ignores the body's 900px reading-width cap and can use the full
+     viewport, which is the entire point: precise crop/redact/freehand
+     work is a lot easier on a screenshot rendered near its real size
+     than one squeezed into a narrow reading column. */
+  .editor-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; align-items: center; justify-content: center; padding: 2rem; }
+  .editor-modal-overlay.open { display: flex; }
+  .editor-modal { position: relative; background: #1a1a1e; border: 1px solid #333; border-radius: 8px; padding: 1rem; max-width: 96vw; max-height: 92vh; overflow: auto; }
+  .editor-modal-close { position: absolute; top: 0.6rem; right: 0.6rem; background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.35rem 0.7rem; cursor: pointer; font-size: 0.85rem; }
+  .editor-modal-close:hover { background: #3a3a42; }
+  .editor-modal-label { color: #8ab4ff; font-weight: 600; margin: 0 3.5rem 0.75rem 0; font-size: 1rem; }
+  .editor-modal-body .img-frame img { max-height: 76vh; width: auto; max-width: 88vw; }
+  .editor-modal-body .expand-btn { display: none; }
+  body.modal-open { overflow: hidden; }
+  .expand-btn { position: absolute; top: 8px; right: 8px; z-index: 6; background: rgba(20,20,24,0.75); color: #f0f0f0; border: 1px solid #555; border-radius: 4px; width: 26px; height: 26px; font-size: 0.9rem; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .expand-btn:hover { background: rgba(40,40,48,0.9); }
 `
 
 const editorJS = `
@@ -167,6 +192,53 @@ const editorJS = `
   function apiJSON(method, path, body) {
     return api(method, path, body).then(function(r) { return r.json(); });
   }
+
+  // Focused/"modal" editing view. A screenshot squeezed into the page's
+  // 900px reading column is fine for a quick glance, but precise work —
+  // circling one line of a stack trace, drawing a tight redaction around
+  // a credential, cropping right at an edge — needs the image rendered
+  // close to its real size, not shrunk down. Rather than build a second,
+  // parallel editor for that, this reparents the SAME imgWrap node
+  // buildImageEditor already built (and already wired every listener
+  // onto, as closures over its own img/imgFrame/etc.) into a large
+  // centered overlay, then moves it back to its original spot on close.
+  // Every position in that subtree is already computed as a percentage
+  // of the image's natural size or a ratio measured fresh at drag time
+  // (see renderAnnotations' and setupDrawing's own comments), so
+  // rendering at a much larger on-screen size needs no code changes
+  // anywhere else at all.
+  var modalOverlay = document.getElementById('editorModalOverlay');
+  var modalBody = document.getElementById('editorModalBody');
+  var modalLabel = document.getElementById('editorModalLabel');
+  var modalReturn = null; // {node, parent, next} — where imgWrap came from, to restore on close
+
+  function openFocusView(imgWrap, label) {
+    modalReturn = {node: imgWrap, parent: imgWrap.parentNode, next: imgWrap.nextSibling};
+    modalLabel.textContent = label;
+    modalBody.appendChild(imgWrap);
+    modalOverlay.classList.add('open');
+    document.body.classList.add('modal-open');
+  }
+
+  // Nothing behind the overlay is reachable while it's open (it covers
+  // the full viewport), so the step list can't re-render out from under
+  // modalReturn.parent between open and close — it's always still the
+  // live DOM node imgWrap started in.
+  function closeFocusView() {
+    if (!modalReturn) return;
+    if (modalReturn.next) {
+      modalReturn.parent.insertBefore(modalReturn.node, modalReturn.next);
+    } else {
+      modalReturn.parent.appendChild(modalReturn.node);
+    }
+    modalReturn = null;
+    modalOverlay.classList.remove('open');
+    document.body.classList.remove('modal-open');
+  }
+
+  document.getElementById('editorModalClose').addEventListener('click', closeFocusView);
+  modalOverlay.addEventListener('mousedown', function(e) { if (e.target === modalOverlay) closeFocusView(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && modalReturn) closeFocusView(); });
 
   function load() {
     fetch('/api/session').then(function(r) { return r.json(); }).then(function(s) {
@@ -501,6 +573,16 @@ const editorJS = `
     var overlay = document.createElement('div');
     overlay.className = 'drag-overlay';
     imgFrame.appendChild(overlay);
+
+    var expandBtn = document.createElement('button');
+    expandBtn.className = 'expand-btn';
+    expandBtn.title = 'Open focused view';
+    expandBtn.textContent = '⤢';
+    expandBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      openFocusView(imgWrap, step.title || ('Step ' + position));
+    });
+    imgFrame.appendChild(expandBtn);
 
     // Live preview while actively drawing a NEW freehand stroke — an SVG
     // sized to the whole frame (not just a sub-region like the crop/

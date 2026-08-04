@@ -1688,6 +1688,81 @@ resize as a possible future addition if it turns out to be wanted.
    rectangle, at the post-move position — the same independent-pixel
    verification already applied to crop (#26) and color (#25).
 
+## 28. Focused "expand" view for the image editor
+
+Decided 2026-08-04. Every step's screenshot editor lived inline in a
+900px-wide reading column alongside every other step. That's fine for
+skimming a story, but wrong for the actual editing work: a screenshot
+captured at full display resolution — often 1900px+ wide, more on
+HiDPI — was rendered down to a few hundred CSS pixels before a QA
+person could even start drawing on it. Thought through from that
+person's actual workflow: circling one specific line in a dense stack
+trace, or drawing a redaction box tight around a credential without
+also covering the label next to it, both need to see and click
+individual pixels precisely — and a screenshot squeezed to a third of
+its size makes exactly that kind of precision work needlessly fiddly,
+which is the opposite of what an annotation tool should feel like.
+
+**Reparents the existing DOM, doesn't build a second editor.**
+`buildImageEditor` already constructs one self-contained `imgWrap`
+subtree (toolbar + image + annotation/crop overlays) with every
+interaction — drawing, dragging, undo/redo, the `stepEditors[...]`
+live-update hooks — wired as closures directly over that subtree's own
+nodes. A parallel "modal editor" would have meant either duplicating
+all of that wiring or threading a size parameter through every drag/
+resize calculation in it; instead, a small "⤢" button on each image
+calls `openFocusView(imgWrap, label)`, which does nothing more than
+`modalBody.appendChild(imgWrap)` — a real DOM move, not a clone, so
+every existing listener and closure keeps working unchanged — and
+records where it came from so `closeFocusView()` can put it straight
+back. This works cleanly for a structural reason established earlier
+in the project rather than by luck: every position in that subtree
+(annotation placement, drag overlays, the crop mask) is already
+computed either as a percentage of the image's *natural* size or as a
+ratio measured fresh at drag time (see the `renderAnnotations` and
+`setupDrawing` comments), never as a fixed pixel value baked in when
+the element was first built — so rendering the exact same subtree at
+several times the size, in a different part of the page, needed zero
+changes to any interaction code.
+
+**Fixed-position overlay, not another element inside the 900px
+column** — the whole point was to escape that width cap, so the modal
+renders relative to the viewport (`position: fixed; inset: 0`) with the
+image capped at `max-height: 76vh; max-width: 88vw` instead of the
+column's `max-width: 100%`, filling most of the actual screen rather
+than a fraction of a reading-width block. Three equivalent ways to
+close it (the "× Close" button, clicking the dark backdrop, or Escape)
+all funnel into the same `closeFocusView`, so there's exactly one place
+that owns "put the node back" — a step list re-render can't happen
+while the modal is open (it covers and intercepts the whole viewport),
+so there's no risk of `closeFocusView` trying to reinsert into a parent
+`render()` already threw away.
+
+**Verified:**
+
+1. `go build/vet/gofmt` clean, full suite passing (this is a frontend-
+   only, embedded-JS change — no new Go logic, so no new Go unit tests;
+   the interaction logic being verified is entirely the *existing*,
+   already-unit-tested backend endpoints exercised through the reused
+   drawing code).
+2. Live browser verification against a real session: clicked the expand
+   button and confirmed the image rendered at roughly 2.4x its inline
+   size (1054 CSS px vs. its ~440px inline width, for a 1904px-wide
+   natural image) with the toolbar, crop mask, and existing freehand
+   annotation all still correctly positioned at the new size; confirmed
+   via the accessibility tree that a second step's own image editor
+   (left in the background) kept its own visible expand button while
+   the focused step's expand button correctly disappeared while inside
+   the modal (the `.editor-modal-body .expand-btn { display: none }`
+   rule doing its job); dispatched a synthetic redact drag inside the
+   modal, applied it, confirmed the redaction rendered correctly at the
+   enlarged scale, then used the real Undo button to revert it cleanly;
+   closed via Escape and confirmed the image reappeared in its original
+   step card with the DOM otherwise undisturbed; reopened and closed
+   again via the "× Close" button as a second, independent path to the
+   same `closeFocusView` function; confirmed via `GET /api/session`
+   that no stray edit state was left behind by the whole sequence.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
