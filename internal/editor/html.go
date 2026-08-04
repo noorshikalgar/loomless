@@ -50,9 +50,12 @@ const editorCSS = `
   .img-toolbar button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; }
   .img-toolbar button:disabled { opacity: 0.35; cursor: default; }
   .img-toolbar button.armed.redact-btn { background: #7a2a2a; border-color: #a03c3c; }
-  .img-toolbar button.armed.highlight-btn { background: #7a5a1a; border-color: #a07c2c; }
   .img-toolbar button.armed.crop-btn { background: #1a5a2e; border-color: #2c7c44; }
-  .img-toolbar button.armed.freehand-btn { background: #3a2a6a; border-color: #5c4c9c; }
+  /* All five shape tools (rect/circle/line/arrow/freehand) share one
+     "armed" color — they're one family now (decision #30), not visually
+     distinguished from each other in the toolbar the way redact/crop
+     are from everything else. */
+  .img-toolbar button.armed.shape-btn { background: #3a2a6a; border-color: #5c4c9c; }
   .freehand-preview { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; pointer-events: none; z-index: 2; overflow: visible; }
   .img-toolbar button.apply-btn { background: #2a5a3a; border-color: #3a7a4a; }
   .img-toolbar button.style-selected { background: #2a4a6a; border-color: #3c6ca0; }
@@ -67,7 +70,11 @@ const editorCSS = `
   .img-frame { position: relative; display: inline-block; max-width: 100%; }
   .drag-overlay { position: absolute; display: none; pointer-events: auto; border: 2px dashed #fff; box-sizing: border-box; cursor: move; }
   .drag-overlay.redact { border-color: #ff5a5a; background: rgba(255, 0, 0, 0.15); }
-  .drag-overlay.highlight { border-color: #ffb020; background: rgba(255, 176, 32, 0.15); }
+  .drag-overlay.rect { border-color: #ffb020; background: rgba(255, 176, 32, 0.15); }
+  /* border-radius on the drag preview itself approximates the final
+     ellipse shape well enough for live feedback while dragging — no
+     extra drawing code needed for the in-progress preview. */
+  .drag-overlay.circle { border-color: #ffb020; background: rgba(255, 176, 32, 0.15); border-radius: 50%; }
   .drag-overlay.crop { border-color: #7ee787; background: rgba(126, 231, 135, 0.1); }
   /* The saved crop boundary (once Applied, not the in-progress
      drag-overlay above) — a dashed line plus four opaque bands covering
@@ -82,8 +89,10 @@ const editorCSS = `
   .handle-nw, .handle-se { cursor: nwse-resize; }
   .handle-ne, .handle-sw { cursor: nesw-resize; }
   .annotation { position: absolute; border: 3px solid #ff3b30; box-sizing: border-box; cursor: move; z-index: 3; }
-  .annotation.freehand { border: none; }
-  .annotation.freehand svg { display: block; }
+  /* line/arrow/freehand ("path shapes") render entirely via an inline
+     SVG polyline instead of a CSS border — see buildAnnotationElement. */
+  .annotation.path-shape { border: none; }
+  .annotation.path-shape svg { display: block; }
   /* Resize handles on an EXISTING annotation are chrome, not content —
      shown only on hover/pin, same as the toolbar, so the default view of
      an annotated screenshot is just the highlight and its number, not a
@@ -116,6 +125,11 @@ const editorCSS = `
   .annotation-toolbar button:hover { background: #45454c; }
   .annotation-toolbar button:disabled { opacity: 0.3; cursor: default; }
   .annotation-toolbar button.annotation-delete-btn:hover { background: #7a2a2a; border-color: #a03c3c; }
+  /* The "#" toggle button's pressed-looking state when this shape
+     currently shows a numbered badge — shapes default to OFF (decision
+     #30), so this is the one control that visibly says "this shape is
+     part of the numbered sequence" at a glance. */
+  .annotation-toolbar button.annotate-toggle.active { background: #2a4a6a; border-color: #3c6ca0; }
   .annotation-toolbar .toolbar-sep { width: 1px; height: 16px; background: #444; margin: 0 1px; }
   .step-title { display: flex; align-items: center; gap: 0.4rem; flex: 1; }
   .step-title h2 { cursor: text; }
@@ -632,8 +646,22 @@ const editorJS = `
     var redactBtn = mkPlainBtn('Draw Redaction', 'redact-btn');
     var solidBtn = mkPlainBtn('Solid', 'style-selected');
     var blurBtn = mkPlainBtn('Blur');
-    var highlightBtn = mkPlainBtn('Draw Highlight', 'highlight-btn');
-    var freehandBtn = mkPlainBtn('Draw Freehand', 'freehand-btn');
+    var sepShapes = document.createElement('span');
+    sepShapes.className = 'sep';
+    // The five shape tools (decision #30) — a persistent palette, not
+    // one-shot toggles: arming one stays armed across multiple draws
+    // (click it again, press Esc, or pick a different tool to stop),
+    // and each drawn shape commits immediately on mouseup with no
+    // separate Apply step, the same "draw it, it's a real object you
+    // can now drag/resize/delete" feel as Excalidraw/Figma-style tools.
+    // Every shape starts with NO numbered badge — annotating one is an
+    // explicit, later choice made from its own hover toolbar (see
+    // buildAnnotationElement's annotateBtn), never automatic.
+    var rectBtn = mkPlainBtn('Rectangle', 'shape-btn');
+    var circleBtn = mkPlainBtn('Circle', 'shape-btn');
+    var lineBtn = mkPlainBtn('Line', 'shape-btn');
+    var arrowBtn = mkPlainBtn('Arrow', 'shape-btn');
+    var freehandBtn = mkPlainBtn('Pen', 'shape-btn');
     var cropBtn = mkPlainBtn('Draw Crop', 'crop-btn');
     var clearCropBtn = mkPlainBtn('Clear Crop');
     var sep1 = document.createElement('span');
@@ -647,7 +675,7 @@ const editorJS = `
     var resetBtn = mkPlainBtn('Reset');
     var modeHint = document.createElement('span');
     modeHint.className = 'mode-hint';
-    [redactBtn, solidBtn, blurBtn, highlightBtn, freehandBtn, cropBtn, clearCropBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
+    [redactBtn, solidBtn, blurBtn, sepShapes, rectBtn, circleBtn, lineBtn, arrowBtn, freehandBtn, cropBtn, clearCropBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
       .forEach(function(elm) { toolbar.appendChild(elm); });
     imgWrap.appendChild(toolbar);
 
@@ -823,7 +851,8 @@ const editorJS = `
 
     setupDrawing({
       img: img, imgFrame: imgFrame, overlay: overlay, handles: drawHandles,
-      redactBtn: redactBtn, highlightBtn: highlightBtn, cropBtn: cropBtn, freehandBtn: freehandBtn,
+      redactBtn: redactBtn, cropBtn: cropBtn,
+      rectBtn: rectBtn, circleBtn: circleBtn, lineBtn: lineBtn, arrowBtn: arrowBtn, freehandBtn: freehandBtn,
       freehandPreviewSvg: freehandPreviewSvg, freehandPreviewPoly: freehandPreviewPoly,
       applyBtn: applyBtn, cancelBtn: cancelBtn,
       undoBtn: undoBtn, redoBtn: redoBtn, resetBtn: resetBtn,
@@ -852,28 +881,84 @@ const editorJS = `
     });
   });
 
-  // buildAnnotationElement renders one EXISTING annotation as a plain
-  // highlighted rectangle with a small number badge by default — drag its
-  // body to move it, drag a corner handle to resize it (both committing
-  // via /api/annotation/update as soon as the drag ends — no separate
-  // Apply, since editing an annotation that already exists isn't
-  // destructive the way redaction is). All the other controls (renumber,
-  // reorder in the stack, delete) live in a floating toolbar above the
-  // annotation, shown only on hover or click — like a word processor's
-  // selection toolbar — rather than permanently overlapping the badge.
-  // Clicking the annotation body (a real click, not a drag) pins the
-  // toolbar open; clicking anywhere outside it un-pins (see the
-  // document-level listener above). Positions are percentages of the
-  // image's natural size (see renderAnnotations for why); the
+  // isAnnotated resolves the same nil-means-legacy-true convention
+  // session.Annotation.IsAnnotated() does on the Go side — an
+  // annotation saved before this field existed has no "annotated" key
+  // in its JSON at all (undefined here), which must mean "yes, still
+  // show the badge, exactly like it always has," never "no, default to
+  // hidden." Every place in this file that reads whether a badge should
+  // show goes through this (or the canonicalized ann.annotated set once
+  // in buildAnnotationElement below), so the two never disagree.
+  function isAnnotated(ann) { return ann.annotated === undefined || ann.annotated === null || ann.annotated === true; }
+
+  // ensureArrowheadMarker lazily injects ONE shared SVG <marker>
+  // definition into the document, the first time any arrow annotation
+  // is built — every arrow's polyline references it by the same id
+  // (marker-end="url(#story-arrowhead)"), so there's exactly one
+  // definition regardless of how many arrows exist. fill="context-
+  // stroke" (SVG2) makes the arrowhead automatically match whatever
+  // color the referencing polyline's own stroke is set to, so recoloring
+  // an arrow via the color picker doesn't need to also touch the marker.
+  var arrowheadMarkerReady = false;
+  function ensureArrowheadMarker() {
+    if (arrowheadMarkerReady) return;
+    arrowheadMarkerReady = true;
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '0');
+    svg.setAttribute('height', '0');
+    svg.style.position = 'absolute';
+    var defs = document.createElementNS(svgNS, 'defs');
+    var marker = document.createElementNS(svgNS, 'marker');
+    marker.setAttribute('id', 'story-arrowhead');
+    marker.setAttribute('viewBox', '0 0 10 10');
+    marker.setAttribute('refX', '8');
+    marker.setAttribute('refY', '5');
+    marker.setAttribute('markerWidth', '6');
+    marker.setAttribute('markerHeight', '6');
+    marker.setAttribute('orient', 'auto-start-reverse');
+    var path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+    path.setAttribute('fill', 'context-stroke');
+    marker.appendChild(path);
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+    document.body.appendChild(svg);
+  }
+
+  // buildAnnotationElement renders one EXISTING shape — for a box kind
+  // (rect/circle) as a CSS-bordered box, for a path kind (line/arrow/
+  // freehand) as an inline SVG polyline — with a numbered badge shown
+  // only when the shape is currently annotated (decision #30; most
+  // shapes aren't, by default). Drag its body to move it; rect/circle
+  // additionally support dragging a corner handle to resize (both
+  // committing via /api/annotation/update as soon as the drag ends — no
+  // separate Apply, since editing a shape that already exists isn't
+  // destructive the way redaction is). All the other controls (toggle
+  // annotated, renumber, recolor, reorder in the stack, delete) live in
+  // a floating toolbar above the shape, shown only on hover or click —
+  // like a word processor's selection toolbar — rather than permanently
+  // overlapping the badge. Clicking the shape's body (a real click, not
+  // a drag) pins the toolbar open; clicking anywhere outside it un-pins
+  // (see the document-level listener above). Positions are percentages
+  // of the image's natural size (see renderAnnotations for why); the
   // drag/resize/commit math still converts through the rendered size,
   // but only once a drag has actually started, by which point the
   // element is necessarily attached and laid out (the user is looking at
   // and dragging real on-screen pixels), so there's no placement-timing
   // hazard there.
   function buildAnnotationElement(img, ann, pos, step, onStackChanged) {
-    var isFreehand = !!(ann.points && ann.points.length);
+    // Canonicalize once, matching Go's shapeKind()/IsAnnotated(): after
+    // this, ann.kind and ann.annotated are always real, defined values,
+    // so nothing else in this function needs to re-check "or is this
+    // legacy data" itself.
+    ann.kind = ann.kind || ((ann.points && ann.points.length) ? 'freehand' : 'rect');
+    ann.annotated = isAnnotated(ann);
+    var kind = ann.kind;
+    var isPathShape = kind === 'line' || kind === 'arrow' || kind === 'freehand';
+
     var el = document.createElement('div');
-    el.className = 'annotation' + (isFreehand ? ' freehand' : '');
+    el.className = 'annotation' + (isPathShape ? ' path-shape' : '');
 
     // color() always resolves to a real, renderable value (never '' or
     // undefined) so every place a color is read — inline styles here,
@@ -889,24 +974,29 @@ const editorJS = `
       el.style.top = (topPct * 100) + '%';
       el.style.width = (ann.w / img.naturalWidth * 100) + '%';
       el.style.height = (ann.h / img.naturalHeight * 100) + '%';
-      if (!isFreehand) el.style.borderColor = color();
+      if (kind === 'rect' || kind === 'circle') {
+        el.style.border = '3px solid ' + color();
+        el.style.borderRadius = kind === 'circle' ? '50%' : '0';
+      } else {
+        el.style.border = 'none';
+      }
       // A toolbar floating above an annotation near the top of the image
       // would be clipped off the frame — flip it below instead.
       el.classList.toggle('toolbar-below', topPct < 0.08);
     }
     place();
 
-    // A freehand stroke draws as an SVG polyline inside the same
-    // percentage-positioned box every annotation already uses for its
-    // bounding rectangle — the box supplies position/size (untouched,
-    // same code as a rectangle annotation), the SVG's viewBox just
-    // remaps the path's natural-pixel coordinates onto whatever CSS
-    // pixel size that box actually renders at, including on resize.
-    // renderStroke is a no-op for a rectangle annotation (never
-    // reassigned below) so commitColor can call it unconditionally
-    // rather than needing to know which kind of annotation this is.
+    // A path shape draws as an SVG polyline inside the same percentage-
+    // positioned box every annotation already uses for its bounding
+    // rectangle — the box supplies position/size (untouched, same code
+    // as a box shape), the SVG's viewBox just remaps the path's
+    // natural-pixel coordinates onto whatever CSS pixel size that box
+    // actually renders at, including on resize. renderStroke is a no-op
+    // for a box shape (never reassigned below) so commitColor can call
+    // it unconditionally rather than needing to know which kind this is.
     var renderStroke = function() {};
-    if (isFreehand) {
+    if (isPathShape) {
+      if (kind === 'arrow') ensureArrowheadMarker();
       var svgNS = 'http://www.w3.org/2000/svg';
       var svg = document.createElementNS(svgNS, 'svg');
       svg.setAttribute('viewBox', '0 0 ' + ann.w + ' ' + ann.h);
@@ -920,6 +1010,7 @@ const editorJS = `
       poly.setAttribute('stroke-width', '4');
       poly.setAttribute('stroke-linecap', 'round');
       poly.setAttribute('stroke-linejoin', 'round');
+      if (kind === 'arrow') poly.setAttribute('marker-end', 'url(#story-arrowhead)');
       el.appendChild(svg);
       svg.appendChild(poly);
       renderStroke = function() {
@@ -934,17 +1025,35 @@ const editorJS = `
     badge.className = 'annotation-badge';
     badge.textContent = ann.number;
     badge.style.background = color();
+    badge.style.display = ann.annotated ? '' : 'none';
     el.appendChild(badge);
 
     var toolbar = document.createElement('div');
     toolbar.className = 'annotation-toolbar';
     toolbar.addEventListener('mousedown', function(e) { e.stopPropagation(); });
 
+    // annotateBtn toggles whether this shape shows a numbered badge at
+    // all — shapes default to NOT annotated (decision #30), so this is
+    // the one control that turns a plain drawn shape into part of the
+    // numbered callout sequence, or back into plain markup.
+    var annotateBtn = document.createElement('button');
+    annotateBtn.className = 'annotate-toggle';
+    annotateBtn.textContent = '#';
+    annotateBtn.title = 'Toggle numbered annotation';
+    toolbar.appendChild(annotateBtn);
+
     var numberInput = document.createElement('input');
     numberInput.type = 'number';
     numberInput.value = ann.number;
     numberInput.title = 'Renumber';
     toolbar.appendChild(numberInput);
+
+    function renderAnnotatedState() {
+      annotateBtn.classList.toggle('active', ann.annotated);
+      badge.style.display = ann.annotated ? '' : 'none';
+      numberInput.style.display = ann.annotated ? '' : 'none';
+    }
+    renderAnnotatedState();
 
     var colorInput = document.createElement('input');
     colorInput.type = 'color';
@@ -1005,13 +1114,25 @@ const editorJS = `
       }).catch(function(e2) { alert('Delete failed: ' + e2.message); });
     });
 
+    // basePayload carries every field UpdateAnnotation needs on EVERY
+    // commit, per its own doc comment: a partial payload (e.g. one that
+    // forgot annotated or kind) would silently reset that field, the
+    // exact regression decision #25 already flagged for color. Each
+    // commit function layers just its own change on top.
+    function basePayload() {
+      return {
+        index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h,
+        number: ann.number, color: ann.color, kind: ann.kind, annotated: ann.annotated,
+      };
+    }
+
     function commitNumber() {
       var number = parseInt(numberInput.value, 10);
       if (isNaN(number) || number === ann.number) { numberInput.value = ann.number; return; }
       var prev = ann.number;
       ann.number = number;
       badge.textContent = number;
-      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h, number: number, color: ann.color})
+      api('POST', '/api/annotation/update', basePayload())
         .catch(function(e) { alert('Renumber failed: ' + e.message); ann.number = prev; badge.textContent = prev; numberInput.value = prev; });
     }
     numberInput.addEventListener('change', commitNumber);
@@ -1020,27 +1141,54 @@ const editorJS = `
       var prev = ann.color;
       ann.color = colorInput.value;
       badge.style.background = color();
-      el.style.borderColor = color();
+      if (kind === 'rect' || kind === 'circle') el.style.borderColor = color();
       renderStroke();
-      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h, number: ann.number, color: ann.color})
+      api('POST', '/api/annotation/update', basePayload())
         .catch(function(e) {
           alert('Color change failed: ' + e.message);
           ann.color = prev;
           badge.style.background = color();
-          el.style.borderColor = color();
+          if (kind === 'rect' || kind === 'circle') el.style.borderColor = color();
           renderStroke();
           colorInput.value = color();
         });
     }
     colorInput.addEventListener('change', commitColor);
 
-    // Freehand strokes are move-only in this first pass — no corner
-    // handles, so no per-vertex or bounding-box resize. Scaling a
-    // hand-drawn path rarely preserves its character anyway (unlike a
-    // rectangle, where "resize" is exactly as meaningful as "draw it
-    // right the first time"), so redrawing is the expected way to fix
-    // a freehand annotation's shape; moving it is still worth keeping.
-    var handles = isFreehand ? [] : ['nw', 'ne', 'sw', 'se'].map(function(corner) {
+    // Toggling whether this shape is part of the numbered sequence at
+    // all (decision #30). Turning ON assigns the next number past the
+    // highest ANNOTATED number currently on this step — computed here,
+    // client-side, from the same step.annotations array the rest of the
+    // editor already keeps in sync, rather than a dedicated backend
+    // endpoint, since /api/annotation/update already accepts a Number.
+    function commitAnnotated(newVal) {
+      var prevAnnotated = ann.annotated, prevNumber = ann.number;
+      if (newVal && !prevAnnotated) {
+        var maxNum = 0;
+        (step.annotations || []).forEach(function(a) { if (isAnnotated(a) && a.number > maxNum) maxNum = a.number; });
+        ann.number = maxNum + 1;
+        numberInput.value = ann.number;
+      }
+      ann.annotated = newVal;
+      renderAnnotatedState();
+      api('POST', '/api/annotation/update', basePayload())
+        .catch(function(e) {
+          alert('Toggle annotation failed: ' + e.message);
+          ann.annotated = prevAnnotated;
+          ann.number = prevNumber;
+          numberInput.value = prevNumber;
+          renderAnnotatedState();
+        });
+    }
+    annotateBtn.addEventListener('click', function() { commitAnnotated(!ann.annotated); });
+
+    // rect/circle support corner-handle resize; line/arrow/freehand are
+    // move-only, same reasoning for all three: dragging a bounding-box
+    // corner doesn't map onto "resize a path" the way it does for an
+    // actual rectangle, and scaling a hand-drawn or two-point shape
+    // rarely preserves what made it meaningful anyway — redrawing is
+    // the expected way to reshape one; moving it is still worth keeping.
+    var handles = isPathShape ? [] : ['nw', 'ne', 'sw', 'se'].map(function(corner) {
       var h = document.createElement('div');
       h.className = 'resize-handle handle-' + corner;
       h.style.left = (corner.indexOf('w') !== -1 ? '0' : '100%');
@@ -1054,16 +1202,21 @@ const editorJS = `
       var sy = img.naturalHeight / img.clientHeight;
       var x = el.offsetLeft * sx, y = el.offsetTop * sy;
       var w = el.offsetWidth * sx, h = el.offsetHeight * sy;
-      var payload = {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: ann.number, color: ann.color};
-      if (isFreehand) {
+      // basePayload() first, BEFORE ann.x/y are overwritten below — it
+      // reads ann's CURRENT (pre-move) position, which the delta below
+      // needs to translate every path vertex by the same amount the
+      // bounding box just moved.
+      var payload = basePayload();
+      if (isPathShape) {
         // Translate every vertex by the same delta the bounding box
-        // moved — this is the only way a freehand annotation's position
-        // update can happen, since there's no independent "box" to move
-        // the path along with; the path IS the annotation.
+        // moved — this is the only way a path shape's position update
+        // can happen, since there's no independent "box" to move the
+        // path along with; the path IS the shape.
         var dx = x - ann.x, dy = y - ann.y;
         ann.points = ann.points.map(function(p) { return {x: p.x + dx, y: p.y + dy}; });
         payload.points = ann.points;
       }
+      payload.x = x; payload.y = y; payload.w = w; payload.h = h;
       ann.x = x; ann.y = y; ann.w = w; ann.h = h;
       renderStroke();
       api('POST', '/api/annotation/update', payload)
@@ -1123,14 +1276,26 @@ const editorJS = `
     return el;
   }
 
-  // setupDrawing wires up the "draw a NEW rectangle" flow shared by both
-  // Draw Redaction and Draw Highlight: arm a mode, drag on the image to
-  // sketch a rectangle, adjust it (move the body, resize from a corner
-  // handle), then Apply — which POSTs to /api/edit-image for redaction
-  // (destructive, pixel-mutating, solid or blur per getRedactStyle()) or
-  // /api/annotation for a highlight (creates a new, subsequently always-
-  // editable annotation, applied live via addAnnotationLocal — no
-  // reload). Nothing is sent to the server until Apply either way.
+  // setupDrawing wires up TWO different interaction models sharing one
+  // "armed tool" concept (decision #30):
+  //
+  // Redact and Crop keep the original draw -> adjust (move the body,
+  // resize from a corner handle) -> Apply/Cancel flow, and disarm after
+  // Apply — appropriate for both: redaction is destructive and
+  // deliberately not a "just try it" action, and crop replaces the
+  // single special region a step can have, not one of many objects.
+  //
+  // The five shape tools (rect/circle/line/arrow/freehand) are a
+  // persistent palette instead: arming one stays armed across multiple
+  // draws (click the same tool again, press Escape, or pick a different
+  // tool to stop — never after just one shape), and a drawn shape POSTs
+  // to /api/annotation and becomes a real, immediately draggable/
+  // resizable object (addAnnotationLocal) the instant the mouse comes
+  // up — no adjust phase, no separate Apply. Post-creation dragging/
+  // resizing (buildAnnotationElement) already covers "I drew it
+  // slightly wrong," so a second adjust-then-commit step before that
+  // would just be the same capability twice. Every shape starts
+  // unannotated (no numbered badge) — see commitShape.
   //
   // All coordinates are tracked relative to imgFrame — the element that
   // directly and only wraps the <img> and its overlay/handles/existing
@@ -1138,27 +1303,32 @@ const editorJS = `
   // lands in exactly the same spot whether computing where the mouse is
   // or where to draw the overlay.
   function setupDrawing(el) {
+    var TOOL_BUTTONS = [
+      ['redactBtn', 'redact'], ['cropBtn', 'crop'],
+      ['rectBtn', 'rect'], ['circleBtn', 'circle'], ['lineBtn', 'line'], ['arrowBtn', 'arrow'], ['freehandBtn', 'freehand'],
+    ];
+    var BOX_SHAPE_MODES = {rect: true, circle: true};
+    var PATH_MODES = {line: true, arrow: true, freehand: true};
+
     var armedMode = null;
-    var pending = null; // {mode, x, y, w, h} in on-screen px, relative to imgFrame — redact/highlight/crop
-    var pendingFreehand = null; // array of {x,y} in the image's natural pixel space, while drawing/adjusting a stroke
+    var pending = null; // {mode, x, y, w, h} in on-screen px, relative to imgFrame — redact/crop's adjust phase, or a rect/circle shape mid-drag
+    var pendingPath = null; // array of {x,y} in the image's own pixel space — freehand/line/arrow mid-drag
     var dragging = null;
 
     function setArmed(mode) {
       armedMode = mode;
       el.img.style.cursor = mode ? 'crosshair' : 'default';
-      el.modeHint.textContent = mode ? ('Drag on the image to draw a ' + mode + '.') : '';
-      el.redactBtn.classList.toggle('armed', mode === 'redact');
-      el.highlightBtn.classList.toggle('armed', mode === 'highlight');
-      el.cropBtn.classList.toggle('armed', mode === 'crop');
-      el.freehandBtn.classList.toggle('armed', mode === 'freehand');
+      el.modeHint.textContent = mode
+        ? (mode === 'redact' || mode === 'crop'
+          ? 'Drag on the image to draw a ' + mode + '.'
+          : 'Drag to draw. Tool stays selected — click it again or press Esc to stop.')
+        : '';
+      TOOL_BUTTONS.forEach(function(pair) { el[pair[0]].classList.toggle('armed', mode === pair[1]); });
     }
 
     function updateButtonStates() {
-      var busy = !!pending || !!pendingFreehand;
-      el.redactBtn.disabled = busy;
-      el.highlightBtn.disabled = busy;
-      el.cropBtn.disabled = busy;
-      el.freehandBtn.disabled = busy;
+      var busy = !!pending || !!pendingPath;
+      TOOL_BUTTONS.forEach(function(pair) { el[pair[0]].disabled = busy; });
     }
 
     function framePos(e) {
@@ -1167,10 +1337,10 @@ const editorJS = `
     }
 
     // framePosNatural is framePos already converted into the image's own
-    // pixel space — freehand points are captured directly in that space
-    // (unlike the redact/highlight/crop rectangle, which stays in
-    // on-screen px until Apply) so the live preview's SVG viewBox can
-    // use them with zero further conversion.
+    // pixel space — path shapes (freehand/line/arrow) are captured
+    // directly in that space (unlike a box shape's rectangle, which
+    // stays in on-screen px until commit) so the live preview's SVG
+    // viewBox can use them with zero further conversion.
     function framePosNatural(e) {
       var rect = el.imgFrame.getBoundingClientRect();
       var sx = el.img.naturalWidth / rect.width;
@@ -1178,14 +1348,19 @@ const editorJS = `
       return {x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy};
     }
 
-    function renderFreehandPreview() {
-      if (!pendingFreehand || pendingFreehand.length === 0) {
+    // renderPathPreview draws the live in-progress path (freehand's
+    // accumulated trail, or a line/arrow's straight start->current) —
+    // one preview element shared by all three path modes, since a line
+    // or arrow's live preview is just a 2-point polyline, exactly what
+    // this already renders.
+    function renderPathPreview() {
+      if (!pendingPath || pendingPath.length === 0) {
         el.freehandPreviewSvg.style.display = 'none';
         return;
       }
       el.freehandPreviewSvg.setAttribute('viewBox', '0 0 ' + el.img.naturalWidth + ' ' + el.img.naturalHeight);
       el.freehandPreviewSvg.style.display = 'block';
-      el.freehandPreviewPoly.setAttribute('points', pendingFreehand.map(function(p) { return p.x + ',' + p.y; }).join(' '));
+      el.freehandPreviewPoly.setAttribute('points', pendingPath.map(function(p) { return p.x + ',' + p.y; }).join(' '));
     }
 
     function renderOverlay() {
@@ -1200,8 +1375,13 @@ const editorJS = `
       el.overlay.style.top = pending.y + 'px';
       el.overlay.style.width = pending.w + 'px';
       el.overlay.style.height = pending.h + 'px';
+      // Resize handles only make sense during redact/crop's adjust
+      // phase — a box shape (rect/circle) commits the instant the drag
+      // ends, so it never reaches a state where dragging a handle would
+      // do anything.
+      var showHandles = pending.mode === 'redact' || pending.mode === 'crop';
       el.handles.forEach(function(h) {
-        h.el.style.display = 'block';
+        h.el.style.display = showHandles ? 'block' : 'none';
         h.el.style.left = (h.corner.indexOf('w') !== -1 ? pending.x : pending.x + pending.w) + 'px';
         h.el.style.top = (h.corner.indexOf('n') !== -1 ? pending.y : pending.y + pending.h) + 'px';
       });
@@ -1213,45 +1393,52 @@ const editorJS = `
     }
     showApplyBar(false);
 
-    el.redactBtn.addEventListener('click', function() {
-      if (pending) return;
-      setArmed(armedMode === 'redact' ? null : 'redact');
-    });
-    el.highlightBtn.addEventListener('click', function() {
-      if (pending) return;
-      setArmed(armedMode === 'highlight' ? null : 'highlight');
-    });
-    el.cropBtn.addEventListener('click', function() {
-      if (pending) return;
-      setArmed(armedMode === 'crop' ? null : 'crop');
-    });
-    el.freehandBtn.addEventListener('click', function() {
-      if (pending || pendingFreehand) return;
-      setArmed(armedMode === 'freehand' ? null : 'freehand');
+    // commitShape POSTs a freshly drawn shape and adds it live — used
+    // by every one of the five shape tools, box or path. Annotated is
+    // always false here: a shape starts as plain markup (decision #30),
+    // and becoming part of the numbered sequence is an explicit later
+    // choice from the shape's own hover toolbar. armedMode deliberately
+    // isn't touched — the tool stays selected for the next shape.
+    function commitShape(kind, rect, points) {
+      var payload = {index: el.stepIndex, kind: kind, color: DEFAULT_ANNOTATION_COLOR, annotated: false};
+      if (points) {
+        payload.points = points;
+      } else {
+        payload.x = rect.x; payload.y = rect.y; payload.w = rect.w; payload.h = rect.h;
+      }
+      apiJSON('POST', '/api/annotation', payload).then(function(data) {
+        stepEditors[el.stepIndex].addAnnotationLocal(data);
+      }).catch(function(e) { alert('Draw failed: ' + e.message); });
+    }
+
+    TOOL_BUTTONS.forEach(function(pair) {
+      el[pair[0]].addEventListener('click', function() {
+        if (pending || pendingPath) return;
+        setArmed(armedMode === pair[1] ? null : pair[1]);
+      });
     });
 
     el.img.addEventListener('mousedown', function(e) {
-      if (!armedMode || pending || pendingFreehand) return;
+      if (!armedMode || pending || pendingPath) return;
       e.preventDefault();
-      if (armedMode === 'freehand') {
-        // A stroke's extent isn't known ahead of time the way a
-        // rectangle's is, so freehand skips the draw-then-adjust split
+      if (PATH_MODES[armedMode]) {
+        // A path's extent isn't known ahead of time the way a box
+        // shape's is, so path modes skip the draw-then-adjust split
         // entirely: the whole mousedown-to-mouseup gesture *is* the
-        // path, captured directly, with Apply/Cancel appearing only
-        // once the gesture ends.
-        dragging = {type: 'freehand'};
-        pendingFreehand = [framePosNatural(e)];
-        renderFreehandPreview();
+        // shape, captured directly and committed on mouseup.
+        dragging = {type: 'path'};
+        pendingPath = [framePosNatural(e)];
+        renderPathPreview();
         return;
       }
       var p = framePos(e);
-      dragging = {type: 'draw', startX: p.x, startY: p.y};
+      dragging = {type: BOX_SHAPE_MODES[armedMode] ? 'shapebox' : 'draw', startX: p.x, startY: p.y};
       pending = {mode: armedMode, x: p.x, y: p.y, w: 0, h: 0};
       renderOverlay();
     });
 
     el.overlay.addEventListener('mousedown', function(e) {
-      if (!pending) return;
+      if (!pending || (pending.mode !== 'redact' && pending.mode !== 'crop')) return;
       e.preventDefault();
       var p = framePos(e);
       dragging = {type: 'move', startX: p.x, startY: p.y, orig: {x: pending.x, y: pending.y, w: pending.w, h: pending.h}};
@@ -1259,7 +1446,7 @@ const editorJS = `
 
     el.handles.forEach(function(h) {
       h.el.addEventListener('mousedown', function(e) {
-        if (!pending) return;
+        if (!pending || (pending.mode !== 'redact' && pending.mode !== 'crop')) return;
         e.preventDefault();
         e.stopPropagation(); // don't also trigger the overlay's move-drag
         dragging = {type: 'resize', corner: h.corner, orig: {x: pending.x, y: pending.y, w: pending.w, h: pending.h}};
@@ -1268,23 +1455,31 @@ const editorJS = `
 
     window.addEventListener('mousemove', function(e) {
       if (!dragging) return;
-      if (dragging.type === 'freehand') {
+      if (dragging.type === 'path') {
         var np = framePosNatural(e);
-        var last = pendingFreehand[pendingFreehand.length - 1];
-        // Only record a point once the pointer has actually moved a few
-        // natural pixels — keeps the path array a reasonable size
-        // without any visible loss of smoothness (a mousemove stream at
-        // typical polling rates would otherwise record a point every
-        // 1-2px, most of it redundant).
-        if (Math.hypot(np.x - last.x, np.y - last.y) >= 3) {
-          pendingFreehand.push(np);
-          renderFreehandPreview();
+        if (armedMode === 'freehand') {
+          var last = pendingPath[pendingPath.length - 1];
+          // Only record a point once the pointer has actually moved a
+          // few natural pixels — keeps the path array a reasonable size
+          // without any visible loss of smoothness (a mousemove stream
+          // at typical polling rates would otherwise record a point
+          // every 1-2px, most of it redundant).
+          if (Math.hypot(np.x - last.x, np.y - last.y) >= 3) {
+            pendingPath.push(np);
+            renderPathPreview();
+          }
+        } else {
+          // line/arrow: always exactly the start point and wherever the
+          // pointer is now, not an accumulated trail.
+          pendingPath[1] = np;
+          pendingPath.length = 2;
+          renderPathPreview();
         }
         return;
       }
       if (!pending) return;
       var p = framePos(e);
-      if (dragging.type === 'draw') {
+      if (dragging.type === 'draw' || dragging.type === 'shapebox') {
         pending.x = Math.min(dragging.startX, p.x);
         pending.y = Math.min(dragging.startY, p.y);
         pending.w = Math.abs(p.x - dragging.startX);
@@ -1309,25 +1504,48 @@ const editorJS = `
 
     window.addEventListener('mouseup', function() {
       if (!dragging) return;
-      if (dragging.type === 'freehand') {
+
+      if (dragging.type === 'path') {
+        var pts = pendingPath;
+        var mode = armedMode;
         dragging = null;
-        if (pendingFreehand && pendingFreehand.length >= 2) {
-          showApplyBar(true);
-          updateButtonStates();
-        } else {
-          // A stray click while armed, same "too small to be
-          // intentional" treatment the rectangle modes give a tiny drag.
-          pendingFreehand = null;
-          renderFreehandPreview();
-          setArmed(null);
+        pendingPath = null;
+        renderPathPreview();
+        var longEnough = pts.length >= 2;
+        if (mode !== 'freehand' && longEnough) {
+          // line/arrow: reject a click with no real movement (two
+          // identical points would satisfy length >= 2 but draw
+          // nothing).
+          longEnough = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) >= 4;
         }
+        if (longEnough) commitShape(mode, null, pts);
         return;
       }
+
+      if (dragging.type === 'shapebox') {
+        var boxMode = pending.mode;
+        var wasTiny = pending.w < 4 || pending.h < 4;
+        dragging = null;
+        if (wasTiny) {
+          // Too small to be an intentional shape — a stray click while
+          // armed, not something to commit.
+          pending = null;
+          renderOverlay();
+          return;
+        }
+        var sx = el.img.naturalWidth / el.img.clientWidth;
+        var sy = el.img.naturalHeight / el.img.clientHeight;
+        var rect = {x: pending.x * sx, y: pending.y * sy, w: pending.w * sx, h: pending.h * sy};
+        pending = null;
+        renderOverlay();
+        commitShape(boxMode, rect, null);
+        return;
+      }
+
+      // redact / crop — unchanged draw -> adjust -> Apply/Cancel flow.
       var wasTinyDraw = dragging.type === 'draw' && pending && (pending.w < 4 || pending.h < 4);
       dragging = null;
       if (wasTinyDraw) {
-        // Too small to be an intentional rectangle -- a stray click while
-        // armed, not a shape to adjust.
         pending = null;
         setArmed(null);
         renderOverlay();
@@ -1342,18 +1560,6 @@ const editorJS = `
     });
 
     el.applyBtn.addEventListener('click', function() {
-      if (pendingFreehand) {
-        var points = pendingFreehand;
-        apiJSON('POST', '/api/annotation', {index: el.stepIndex, points: points}).then(function(data) {
-          pendingFreehand = null;
-          renderFreehandPreview();
-          setArmed(null);
-          showApplyBar(false);
-          updateButtonStates();
-          stepEditors[el.stepIndex].addAnnotationLocal(data);
-        }).catch(function(e) { alert('Freehand highlight failed: ' + e.message); });
-        return;
-      }
       if (!pending) return;
       var mode = pending.mode;
       var scaleX = el.img.naturalWidth / el.img.clientWidth;
@@ -1362,14 +1568,9 @@ const editorJS = `
         x: pending.x * scaleX, y: pending.y * scaleY,
         w: pending.w * scaleX, h: pending.h * scaleY,
       };
-      var request;
-      if (mode === 'redact') {
-        request = apiJSON('POST', '/api/edit-image', Object.assign({index: el.stepIndex, style: el.getRedactStyle()}, rect));
-      } else if (mode === 'crop') {
-        request = apiJSON('POST', '/api/crop', Object.assign({index: el.stepIndex}, rect));
-      } else {
-        request = apiJSON('POST', '/api/annotation', Object.assign({index: el.stepIndex}, rect));
-      }
+      var request = mode === 'redact'
+        ? apiJSON('POST', '/api/edit-image', Object.assign({index: el.stepIndex, style: el.getRedactStyle()}, rect))
+        : apiJSON('POST', '/api/crop', Object.assign({index: el.stepIndex}, rect));
       request.then(function(data) {
         pending = null;
         setArmed(null);
@@ -1377,25 +1578,41 @@ const editorJS = `
         showApplyBar(false);
         updateButtonStates();
         var editor = stepEditors[el.stepIndex];
-        if (mode === 'redact') {
-          editor.setStepData(data);
-          editor.bustImageCache();
-        } else if (mode === 'crop') {
-          editor.setStepData(data);
-        } else {
-          editor.addAnnotationLocal(data);
-        }
+        editor.setStepData(data);
+        if (mode === 'redact') editor.bustImageCache();
       }).catch(function(e) { alert('Edit failed: ' + e.message); });
     });
 
     el.cancelBtn.addEventListener('click', function() {
       pending = null;
-      pendingFreehand = null;
-      renderFreehandPreview();
       setArmed(null);
       renderOverlay();
       showApplyBar(false);
       updateButtonStates();
+    });
+
+    // Escape cancels an in-progress redact/crop draw the same way the
+    // Cancel button does, or simply disarms whatever shape tool is
+    // selected — but not while the user is typing in a text field
+    // elsewhere on the page (a caption textarea, a rename input), where
+    // Escape already means something else.
+    document.addEventListener('keydown', function(e) {
+      if (e.key !== 'Escape') return;
+      var active = document.activeElement;
+      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) return;
+      if (pending) {
+        pending = null;
+        setArmed(null);
+        renderOverlay();
+        showApplyBar(false);
+        updateButtonStates();
+      } else if (pendingPath) {
+        pendingPath = null;
+        renderPathPreview();
+        setArmed(null);
+      } else if (armedMode) {
+        setArmed(null);
+      }
     });
 
     el.undoBtn.addEventListener('click', function() {

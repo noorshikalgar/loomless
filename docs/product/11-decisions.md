@@ -1919,6 +1919,171 @@ actually moves the file.
    heading bug in the first place; it wasn't visible in the unit tests
    until a regression test was written specifically to pin it after.
 
+## 30. Annotation redesign: a persistent shape-tool stack, decoupled from numbering
+
+Decided 2026-08-04, in direct response to user feedback that named two
+concrete problems and a design change, not just "improve annotations":
+"I draw once and leave it. It does not give me to draw again, that
+should not be the case... we also want tools like circle, rect, lines,
+arrows... by default no shape will have annotations... when I select
+them or hover on the shapes I can have option to add annotations."
+
+**The bug: every draw tool disarmed itself after one shape.** Redact,
+the old single "Draw Highlight," and freehand all called `setArmed(null)`
+the instant Apply succeeded (or, for freehand, the instant a stroke was
+created) — meaning drawing a second shape always required re-clicking
+the tool button first. This matched how a *destructive* action like
+redaction should behave (deliberate, one at a time), but it was the
+wrong model entirely for markup: a real drawing tool (Excalidraw,
+Figma) keeps a tool selected across many draws until you explicitly
+switch away, and that's what "I draw once and it won't let me draw
+again" was actually asking for.
+
+**Two different interaction models now share one "armed tool" concept,
+split by what each tool actually is.** Redact and Crop keep the
+original draw -> adjust (resize via corner handles) -> Apply/Cancel
+flow and disarm after Apply, because both are genuinely different from
+markup: redaction is destructive and deliberately not "just try it,"
+and crop replaces the single special region a step can have, not one
+of many independent objects. The five shape tools — Rectangle, Circle,
+Line, Arrow, Pen (freehand) — are a **persistent palette**: arming one
+stays armed across draws (click the same tool again, press Escape, or
+pick a different tool to stop — never after just one shape), and each
+drawn shape POSTs to `/api/annotation` and becomes a real, immediately
+draggable object the instant the mouse comes up, with **no separate
+Apply step at all**. Post-creation dragging/resizing already existed
+(`buildAnnotationElement`) for adjusting a shape that came out slightly
+wrong, so a second adjust-before-commit phase in front of that would
+have just been the same capability twice — removing it is a
+simplification, not a missing feature.
+
+**Circle/Line/Arrow reuse existing primitives rather than adding new
+rasterization code.** A circle is an ellipse inscribed in the drawn
+box, stroked via the exact same overlapping-stamped-circles technique
+`drawPolyline` already used for a freehand stroke (`drawEllipseBorder`
+walks the parametric ellipse and stamps `drawFilledCircle` at each
+angle). A line is a two-point path — `drawPolyline` with two points
+already draws a straight segment, so line needed **zero new Go
+rendering code**. An arrow is a line plus `drawArrowhead`, which is
+itself just two more two-point `drawPolyline` calls for the wings. On
+the editor side, a box shape (rect/circle) renders via a CSS
+border (`border-radius: 50%` for circle — one line of CSS approximates
+the ellipse well enough for a live preview and the persisted shape
+alike) and a path shape (line/arrow/freehand) renders via an inline SVG
+polyline, generalizing the freehand-only SVG code from decision #27 to
+all three; an arrow's polyline additionally references one shared,
+lazily-created SVG `<marker>` (`fill="context-stroke"`, so it
+auto-matches whatever color the shape is set to, with no per-color
+marker variants needed).
+
+**Every shape defaults to NOT annotated — numbering is now an explicit,
+per-shape opt-in, not automatic.** Before this, every rectangle or
+freehand stroke was unconditionally a numbered "annotation": drawing a
+plain circle around something to just highlight it always claimed a
+number in the sequence whether that made sense or not. `Annotation`
+gained `Annotated *bool` — a pointer specifically so "the JSON key was
+never written" (every annotation saved before this field existed, which
+under the OLD rules was *always* shown numbered) can be told apart from
+"explicitly set to false" (a freshly drawn shape, deliberately left as
+plain markup): nil means "legacy, keep showing the badge exactly as it
+always has," never "unset, default to hidden." `IsAnnotated()` is the
+one place that resolves this; `capture.Annotation`'s own `Annotated`
+field is a plain bool by contrast, because `toCaptureAnnotations`
+already resolves the legacy convention via `IsAnnotated()` before values
+ever reach the rendering package — by the time `RenderAnnotations` sees
+`Annotated`, false always genuinely means "don't draw the badge," no
+further nil-checking needed downstream. The click daemon's automatic
+ring is the one shape creator that still explicitly passes
+`Annotated: true`, since a sequential numbered marker showing click
+order is its entire purpose and was never in question.
+
+**A shape's own hover toolbar gained a "#" toggle** (next to the
+existing renumber/recolor/reorder/delete controls, which already only
+appear on hover/pin per decision #18's "chrome, not permanent clutter"
+choice) that turns the numbered badge on or off. Turning it on assigns
+the next number past the highest currently-*annotated* number on that
+step (computed client-side from the same `step.annotations` array
+already kept in sync, not a new backend endpoint — `/api/annotation/
+update` already accepted a `Number`) rather than reusing whatever number
+the shape happened to be created with; turning it off leaves the
+stored number alone (harmless and unused while off, and re-toggling
+later reassigns fresh rather than risking a stale, confusing number).
+The number input itself is hidden alongside the badge when a shape
+isn't annotated, so the toolbar doesn't show an editable field for
+something that currently has no visible effect.
+
+**`AddAnnotation`/`UpdateAnnotation` took a new `AnnotationShape`
+struct instead of more positional parameters.** Both were already at
+eight parameters before this feature; adding `Kind` and `Annotated`
+would have pushed `UpdateAnnotation` to twelve, well past the point
+Go's own conventions call for a struct instead of a longer positional
+list — and since every call site (the click daemon, both editor
+endpoints, every test) needed touching anyway for the new fields, the
+incremental cost of doing this properly now was low. Every commit path
+in the editor (drag, resize, renumber, recolor, and now toggling
+annotated) resends the shape's FULL current state through this struct,
+not a partial patch — the exact "a plain drag silently resets an
+unrelated field" lesson decision #25 already learned for color, now
+also true for `Kind` and `Annotated`.
+
+**Verified:**
+
+1. Unit tests: `internal/session` (`IsAnnotated()`'s nil-means-legacy-
+   true resolution, explicitly for nil/&true/&false; a newly created
+   shape's `Annotated` is exactly what the caller asked for and is
+   never left as a nil pointer, which is reserved for pre-existing
+   data; toggling `Annotated` via `UpdateAnnotation` round-trips through
+   save/reload; `Kind` persists correctly for circle/line/arrow, with a
+   line's bounding box correctly derived from its two points).
+   `internal/capture` (a circle's rendered pixels form an ellipse, not
+   a rectangle — checked by confirming a bbox corner a rectangle border
+   would touch stays untouched while the ellipse's actual top-center
+   boundary point is painted; a line's stroke follows only the
+   diagonal, not its own bounding box; an arrow paints extra pixels
+   near its endpoint beyond what the identical two-point line does,
+   proving the arrowhead actually extends past the bare shaft;
+   `Annotated: false` suppresses the badge while leaving the outline
+   drawn; legacy data — `Kind == ""` with non-empty `Points` — still
+   resolves to "freehand" via `shapeKind`, not the empty-Kind "rect"
+   fallback).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Live browser verification against real sessions, specifically
+   targeting the reported bug and the new behaviors: armed "Rectangle"
+   and drew two separate shapes back to back with no re-click between
+   them, confirming the tool stayed armed and both persisted (the exact
+   bug report — "draw once and it won't let me draw again" — now
+   doesn't reproduce); did the same for circle, line, arrow, and pen in
+   turn, each confirmed via `GET /api/session` with the correct `kind`
+   and `annotated: false`; a **first attempt** at testing all five
+   shapes fired their draws synchronously with no gap between requests
+   and produced corrupted, overwritten data — traced to `AddAnnotation`'s
+   pre-existing (not introduced by this change) Load-mutate-Save
+   pattern racing when multiple requests overlap in flight, a scenario
+   only reachable by firing synthetic events faster than any real user
+   can click; re-ran with each draw properly sequenced (matching real
+   usage) and every shape persisted correctly, confirming this was a
+   test-harness artifact, not a product regression — recorded here as
+   the same kind of "verify the test before blaming the product" lesson
+   decisions #24/#25 already logged, and as a known pre-existing
+   concurrency characteristic worth hardening separately if it ever
+   proves reachable by realistic use. Toggled a shape's "#" button on,
+   confirmed the badge appeared with the correct next-sequential number
+   and a **sibling shape stayed completely unannotated** (isolated,
+   properly-sequenced repeat of the toggle test after the race above
+   was understood); toggled back off, confirmed the badge disappeared.
+   Dragged a rectangle and confirmed its new position persisted with
+   `kind`/`annotated` unchanged; dragged an arrow and confirmed via the
+   API response that every point translated by the same delta as the
+   bounding box, not just the box itself. Confirmed Escape disarms an
+   armed tool. Exported to PDF and rasterized with PyMuPDF: two plain
+   rectangles and an arrow with a genuinely visible arrowhead all
+   rendered with **no numbered badges at all**, matching the new
+   default; a separate legacy session (`test4`, with annotations saved
+   before this feature existed) still rendered its old badge correctly
+   after reloading in the redesigned editor, confirming the nil-means-
+   legacy-true compatibility path works end to end, not just in a unit
+   test.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

@@ -128,6 +128,71 @@ type Annotation struct {
 	// separate features, the same "keep it generic" reasoning decision
 	// #18 already established for the click-ring vs. manual highlight.
 	Points []Point `json:"points,omitempty"`
+
+	// Kind selects how this shape renders (decision #30): "" or "rect"
+	// (default, a rectangle border), "circle" (an ellipse inscribed in
+	// X/Y/W/H), "line" or "arrow" (a straight segment through
+	// Points[0]/Points[1] — arrow additionally draws an arrowhead at the
+	// second point), or "freehand" (a path through every point in
+	// Points). Every annotation saved before this field existed has
+	// Kind == "" — RenderAnnotations treats "" with non-empty Points the
+	// same as "freehand" (the only kind "" could ever have meant before
+	// Kind existed), so old session.json files render identically
+	// without any migration step.
+	Kind string `json:"kind,omitempty"`
+
+	// Annotated is whether this shape currently shows its numbered
+	// badge. A shape's default, per decision #30, is UNANNOTATED — most
+	// drawn shapes are just markup, not part of a numbered callout
+	// sequence, and forcing every one to claim a number was the exact
+	// friction this field exists to remove. Annotated is a *bool, not a
+	// bool, specifically so "the JSON key is absent" (every annotation
+	// saved before this field existed, which — under the old,
+	// pre-decision-#30 rules — was ALWAYS shown numbered) can be told
+	// apart from "explicitly set to false" (a new shape someone drew and
+	// deliberately left as a plain shape): nil means "legacy, keep
+	// showing its badge exactly as it always has," never "unset,
+	// default to off." Every NEWLY CREATED annotation must set this
+	// explicitly (see AnnotationShape) — nil is reserved for pre-
+	// existing data, not a valid state for anything created going
+	// forward. See IsAnnotated.
+	Annotated *bool `json:"annotated,omitempty"`
+}
+
+// IsAnnotated reports whether a currently shows its numbered badge —
+// the one place that resolves Annotated's nil-means-legacy-true
+// convention into a real bool, so nothing else needs to know that
+// convention exists.
+func (a Annotation) IsAnnotated() bool {
+	return a.Annotated == nil || *a.Annotated
+}
+
+// AnnotationShape carries every field that defines what a drawn shape
+// looks like and whether it currently shows a numbered badge — shared
+// by AddAnnotation and UpdateAnnotation now that an annotation can be
+// five different kinds of shape (decision #30), which pushed what used
+// to be a positional argument list (already at eight for
+// UpdateAnnotation) well past the point of being readable at the call
+// site.
+type AnnotationShape struct {
+	X, Y, W, H float64
+	// Color is a "#rrggbb" hex string, or "" for the default highlight
+	// color.
+	Color string
+	// Kind is "", "rect", "circle", "line", "arrow", or "freehand" — see
+	// Annotation.Kind.
+	Kind string
+	// Points is nil for a box shape (rect/circle — X/Y/W/H are used as
+	// given) and non-nil for a path shape (line/arrow/freehand — X/Y/W/H
+	// are ignored in favor of the path's own bounding box, via
+	// boundingBox, so the two can never disagree about the shape's
+	// position).
+	Points []Point
+	// Annotated is whether this shape shows its numbered badge. Callers
+	// creating a brand-new shape must set this explicitly — see
+	// Annotation.Annotated's doc comment for why nil is reserved for
+	// legacy data and never produced by a live create/update call.
+	Annotated bool
 }
 
 // Point is one vertex of a freehand annotation's path, in the image's
@@ -958,23 +1023,21 @@ func findStep(s *Session, stepIndex int) (*Step, error) {
 	return nil, fmt.Errorf("step %d does not exist in this session", stepIndex)
 }
 
-// AddAnnotation reloads the named session, appends a new numbered
-// Annotation to a step (auto-numbered one past the highest existing
-// number on that step — freely renumbered afterward via
-// UpdateAnnotation), logs the change, and saves. Used by the click
-// daemon's automatic ring, the editor's manually-drawn rectangle
-// highlights, and freehand strokes — see decision #18 (generic
-// annotations) and decision #27 (freehand joining the same list). color
-// is a "#rrggbb" hex string, or "" for the default highlight color.
-// points is nil for a rectangle annotation (x/y/w/h are used as given);
-// non-nil makes this a freehand stroke, and x/y/w/h are ignored in favor
-// of the path's own bounding box (see boundingBox) — the two are never
-// allowed to disagree about an annotation's position. Returns the
-// created Annotation directly (not just buried in the returned Session)
-// so a caller like the editor's API can hand it straight back to the
-// client without making the client guess which entry in the step's list
-// is the new one.
-func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string, points []Point) (Annotation, *Session, error) {
+// AddAnnotation reloads the named session, appends a new shape to a
+// step, logs the change, and saves. Used by the click daemon's
+// automatic ring and every shape the editor's toolbar can draw (decision
+// #18's "keep it generic" principle, extended by decision #30 to cover
+// rect/circle/line/arrow/freehand as one family rather than separate
+// features). Its badge number is auto-assigned one past the highest
+// existing ANNOTATED number on the step regardless of whether shape.
+// Annotated is itself true — so a shape drawn while unannotated and
+// toggled on later still gets a sensible number, not 0 or a collision —
+// though the badge itself only renders when Annotated is true. Returns
+// the created Annotation directly (not just buried in the returned
+// Session) so a caller like the editor's API can hand it straight back
+// to the client without making the client guess which entry in the
+// step's list is the new one.
+func AddAnnotation(name string, stepIndex int, shape AnnotationShape) (Annotation, *Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
 		return Annotation{}, nil, err
@@ -984,8 +1047,9 @@ func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string,
 		return Annotation{}, nil, err
 	}
 
-	if points != nil {
-		x, y, w, h = boundingBox(points)
+	x, y, w, h := shape.X, shape.Y, shape.W, shape.H
+	if shape.Points != nil {
+		x, y, w, h = boundingBox(shape.Points)
 	}
 
 	nextID, nextNumber := 1, 1
@@ -997,17 +1061,28 @@ func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string,
 			nextNumber = a.Number + 1
 		}
 	}
-	created := Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h, Color: color, Points: points}
+	annotated := shape.Annotated
+	created := Annotation{
+		ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h,
+		Color: shape.Color, Points: shape.Points, Kind: shape.Kind, Annotated: &annotated,
+	}
 	target.Annotations = append(target.Annotations, created)
 
 	s.EditLog = append(s.EditLog, EditEntry{
 		Timestamp: time.Now(), Action: "add_annotation", StepIndex: stepIndex,
-		NewValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", nextNumber, x, y, w, h),
+		NewValue: fmt.Sprintf("#%d %s(%.0f,%.0f,%.0f,%.0f)", nextNumber, shapeKindOrDefault(shape.Kind), x, y, w, h),
 	})
 	if err := save(dir, s); err != nil {
 		return Annotation{}, nil, err
 	}
 	return created, s, nil
+}
+
+func shapeKindOrDefault(kind string) string {
+	if kind == "" {
+		return "rect"
+	}
+	return kind
 }
 
 // SetStepPresentation reloads the named session and replaces a step's
@@ -1087,17 +1162,21 @@ func ReorderAnnotations(name string, stepIndex int, newOrder []int) (*Session, e
 }
 
 // UpdateAnnotation reloads the named session and replaces an existing
-// annotation's position, size, display number, and color — identified by
-// its stable ID, which never changes, not by its position in the list or
-// its (freely reassignable) Number. color is a "#rrggbb" hex string, or
-// "" for the default highlight color. points is nil for every update
-// that isn't moving a freehand stroke (rectangle resize/move, renumber,
-// recolor — x/y/w/h are used as given); non-nil replaces the stroke's
-// path and recomputes x/y/w/h from it via boundingBox, ignoring the
-// x/y/w/h arguments, for the same reason AddAnnotation does — a
-// freehand annotation's bounding box and its path must never be allowed
-// to disagree.
-func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float64, number int, color string, points []Point) (*Session, error) {
+// annotation's position, size, display number, and shape fields —
+// identified by its stable ID, which never changes, not by its position
+// in the list or its (freely reassignable) Number. Every commit path in
+// the editor (drag/resize, renumber, recolor, and toggling the
+// annotated badge) must resend the FULL shape, not just the field it
+// changed — there is no partial merge here, matching the exact lesson
+// decision #25 already learned about color (a plain drag that forgot to
+// resend color would have silently reset a custom color back to
+// default; the same is now true for Kind and Annotated too).
+// shape.Points is nil for every update that isn't moving a path shape
+// (rect/circle resize or move, renumber, recolor, or toggling annotated
+// — shape.X/Y/W/H are used as given); non-nil replaces the path and
+// recomputes X/Y/W/H from it via boundingBox, ignoring the given
+// X/Y/W/H, for the same reason AddAnnotation does.
+func UpdateAnnotation(name string, stepIndex, annotationID, number int, shape AnnotationShape) (*Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
 		return nil, err
@@ -1107,21 +1186,25 @@ func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float
 		return nil, err
 	}
 
-	if points != nil {
-		x, y, w, h = boundingBox(points)
+	x, y, w, h := shape.X, shape.Y, shape.W, shape.H
+	if shape.Points != nil {
+		x, y, w, h = boundingBox(shape.Points)
 	}
 
 	var old Annotation
 	found := false
+	annotated := shape.Annotated
 	for i := range target.Annotations {
 		if target.Annotations[i].ID == annotationID {
 			old = target.Annotations[i]
 			target.Annotations[i].X, target.Annotations[i].Y = x, y
 			target.Annotations[i].W, target.Annotations[i].H = w, h
 			target.Annotations[i].Number = number
-			target.Annotations[i].Color = color
-			if points != nil {
-				target.Annotations[i].Points = points
+			target.Annotations[i].Color = shape.Color
+			target.Annotations[i].Kind = shape.Kind
+			target.Annotations[i].Annotated = &annotated
+			if shape.Points != nil {
+				target.Annotations[i].Points = shape.Points
 			}
 			found = true
 			break
@@ -1133,8 +1216,8 @@ func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float
 
 	s.EditLog = append(s.EditLog, EditEntry{
 		Timestamp: time.Now(), Action: "update_annotation", StepIndex: stepIndex,
-		OldValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", old.Number, old.X, old.Y, old.W, old.H),
-		NewValue: fmt.Sprintf("#%d rect(%.0f,%.0f,%.0f,%.0f)", number, x, y, w, h),
+		OldValue: fmt.Sprintf("#%d %s(%.0f,%.0f,%.0f,%.0f)", old.Number, shapeKindOrDefault(old.Kind), old.X, old.Y, old.W, old.H),
+		NewValue: fmt.Sprintf("#%d %s(%.0f,%.0f,%.0f,%.0f)", number, shapeKindOrDefault(shape.Kind), x, y, w, h),
 	})
 	if err := save(dir, s); err != nil {
 		return nil, err

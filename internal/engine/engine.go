@@ -469,7 +469,8 @@ func RunClickDaemon(name string, highlightClicks bool, logf func(format string, 
 			return
 		}
 		if wantAnnotation {
-			if _, _, aerr := session.AddAnnotation(name, step.Index, annX, annY, annW, annH, "", nil); aerr != nil {
+			shape := session.AnnotationShape{X: annX, Y: annY, W: annW, H: annH, Kind: "rect", Annotated: true}
+			if _, _, aerr := session.AddAnnotation(name, step.Index, shape); aerr != nil {
 				logf("add annotation failed: %v", aerr)
 			}
 		}

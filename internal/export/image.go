@@ -34,7 +34,15 @@ func stepHeading(step session.Step, position int) string {
 func toCaptureAnnotations(anns []session.Annotation) []capture.Annotation {
 	out := make([]capture.Annotation, len(anns))
 	for i, a := range anns {
-		out[i] = capture.Annotation{Number: a.Number, X: a.X, Y: a.Y, W: a.W, H: a.H, Color: a.Color, Points: toCapturePoints(a.Points)}
+		out[i] = capture.Annotation{
+			Number: a.Number, X: a.X, Y: a.Y, W: a.W, H: a.H, Color: a.Color,
+			Points: toCapturePoints(a.Points), Kind: a.Kind,
+			// IsAnnotated resolves session.Annotation's nil-means-legacy
+			// convention into a real bool here, once — capture.Annotation
+			// itself just trusts Annotated at face value (see its own
+			// doc comment).
+			Annotated: a.IsAnnotated(),
+		}
 	}
 	return out
 }

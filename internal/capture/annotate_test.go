@@ -128,7 +128,7 @@ func TestRenderAnnotationsDrawsBorderAndBadgeLeavesRestUntouched(t *testing.T) {
 	original := color.RGBA{R: 10, G: 20, B: 30, A: 255}
 	src := solidTestImage(t, original)
 
-	ann := Annotation{Number: 7, X: 20, Y: 20, W: 50, H: 50} // rect [20,70) x [20,70)
+	ann := Annotation{Number: 7, X: 20, Y: 20, W: 50, H: 50, Annotated: true} // rect [20,70) x [20,70)
 	edited, err := RenderAnnotations(src, []Annotation{ann})
 	if err != nil {
 		t.Fatalf("RenderAnnotations: %v", err)
@@ -353,5 +353,157 @@ func TestCropEntirelyOutsideImageReturnsError(t *testing.T) {
 	src := solidTestImage(t, color.RGBA{R: 1, G: 2, B: 3, A: 255})
 	if _, err := Crop(src, 200, 200, 50, 50); err == nil {
 		t.Error("Crop with a rectangle entirely outside the image succeeded, want an error")
+	}
+}
+
+// TestRenderAnnotationsCircleDrawsAnEllipseNotARectangle confirms a
+// "circle" kind actually strokes an ellipse — specifically that a pixel
+// at the CORNER of the shape's bounding box (which a rectangle border
+// would touch, but an ellipse inscribed in that box never reaches)
+// stays untouched, while a pixel on the ellipse's actual boundary (the
+// top-center point, at bbox-center-x, bbox-min-y) is painted. This is
+// the same "prove it's the right shape, not just that something
+// changed" standard TestRenderAnnotationsFreehandDrawsAlongThePathNotARectangle
+// already set for freehand vs. rectangle.
+func TestRenderAnnotationsCircleDrawsAnEllipseNotARectangle(t *testing.T) {
+	original := color.RGBA{R: 10, G: 20, B: 30, A: 255}
+	src := solidTestImage(t, original)
+
+	// Bounding box [10,90) x [10,90) — center (50,50), radii (40,40).
+	ann := Annotation{X: 10, Y: 10, W: 80, H: 80, Kind: "circle"}
+	edited, err := RenderAnnotations(src, []Annotation{ann})
+	if err != nil {
+		t.Fatalf("RenderAnnotations: %v", err)
+	}
+	img := decodePNG(t, edited)
+
+	cr, cg, cb, ca := img.At(10, 10).RGBA()
+	corner := color.RGBA{R: uint8(cr >> 8), G: uint8(cg >> 8), B: uint8(cb >> 8), A: uint8(ca >> 8)}
+	if corner != original {
+		t.Errorf("bbox corner (10,10) = %v, want untouched original %v — a rectangle border would have painted this corner, an ellipse should not", corner, original)
+	}
+
+	tr, tg, tb, ta := img.At(50, 10).RGBA()
+	top := color.RGBA{R: uint8(tr >> 8), G: uint8(tg >> 8), B: uint8(tb >> 8), A: uint8(ta >> 8)}
+	if top != highlightColor {
+		t.Errorf("ellipse top-center (50,10) = %v, want highlight color %v — the ellipse boundary should pass through here", top, highlightColor)
+	}
+}
+
+// TestRenderAnnotationsLineDrawsOnlyTheSegment confirms a "line"
+// annotation strokes the straight segment between its two points and
+// nothing else — checked by confirming a point ON the segment is
+// painted and a point well off the segment (but inside the segment's
+// own bounding box) is not, the same "not a rectangle" distinction
+// freehand's own test makes.
+func TestRenderAnnotationsLineDrawsOnlyTheSegment(t *testing.T) {
+	original := color.RGBA{R: 10, G: 20, B: 30, A: 255}
+	src := solidTestImage(t, original)
+
+	// Diagonal from (10,10) to (90,90) — its own bounding box is the
+	// whole 80x80 square, but the stroke itself should only touch
+	// pixels near the diagonal.
+	ann := Annotation{X: 10, Y: 10, W: 80, H: 80, Kind: "line", Points: []Point{{X: 10, Y: 10}, {X: 90, Y: 90}}}
+	edited, err := RenderAnnotations(src, []Annotation{ann})
+	if err != nil {
+		t.Fatalf("RenderAnnotations: %v", err)
+	}
+	img := decodePNG(t, edited)
+
+	mr, mg, mb, ma := img.At(50, 50).RGBA()
+	mid := color.RGBA{R: uint8(mr >> 8), G: uint8(mg >> 8), B: uint8(mb >> 8), A: uint8(ma >> 8)}
+	if mid != highlightColor {
+		t.Errorf("line midpoint (50,50) = %v, want highlight color %v", mid, highlightColor)
+	}
+
+	fr, fg, fb, fa := img.At(85, 15).RGBA() // near a corner of the bbox, far from the diagonal
+	farFromLine := color.RGBA{R: uint8(fr >> 8), G: uint8(fg >> 8), B: uint8(fb >> 8), A: uint8(fa >> 8)}
+	if farFromLine != original {
+		t.Errorf("point (85,15), far from the diagonal but inside its bbox, = %v, want untouched original %v — a rectangle border would paint here, a line should not", farFromLine, original)
+	}
+}
+
+// TestRenderAnnotationsArrowDrawsAnArrowheadAtTheSecondPoint confirms
+// an "arrow" annotation draws extra pixels near its endpoint (the
+// arrowhead's wings) beyond what a plain "line" of the same two points
+// would — the one visible difference between the two kinds.
+func TestRenderAnnotationsArrowDrawsAnArrowheadAtTheSecondPoint(t *testing.T) {
+	original := color.RGBA{R: 10, G: 20, B: 30, A: 255}
+	points := []Point{{X: 10, Y: 50}, {X: 80, Y: 50}}
+
+	lineOnly, err := RenderAnnotations(solidTestImage(t, original), []Annotation{{X: 10, Y: 50, W: 70, H: 0, Kind: "line", Points: points}})
+	if err != nil {
+		t.Fatalf("RenderAnnotations (line): %v", err)
+	}
+	withArrow, err := RenderAnnotations(solidTestImage(t, original), []Annotation{{X: 10, Y: 50, W: 70, H: 0, Kind: "arrow", Points: points}})
+	if err != nil {
+		t.Fatalf("RenderAnnotations (arrow): %v", err)
+	}
+	lineImg := decodePNG(t, lineOnly)
+	arrowImg := decodePNG(t, withArrow)
+
+	// A point on one of the arrowhead's wings (computed from the same
+	// geometry drawArrowhead uses: wingLength 14 at ~25.7 degrees off
+	// the shaft, 60% of the way from the tip toward the wing's own
+	// endpoint) — 4px below the shaft's centerline, safely outside the
+	// bare shaft's own ~2px stroke half-width.
+	const probeX, probeY = 72, 54
+	lr, lg, lb, la := lineImg.At(probeX, probeY).RGBA()
+	lineWing := color.RGBA{R: uint8(lr >> 8), G: uint8(lg >> 8), B: uint8(lb >> 8), A: uint8(la >> 8)}
+	ar, ag, ab, aa := arrowImg.At(probeX, probeY).RGBA()
+	arrowWing := color.RGBA{R: uint8(ar >> 8), G: uint8(ag >> 8), B: uint8(ab >> 8), A: uint8(aa >> 8)}
+
+	if lineWing == highlightColor {
+		t.Fatalf("test assumption broken: a plain line already paints (%d,%d) — pick a different probe point that only the arrowhead reaches", probeX, probeY)
+	}
+	if arrowWing != highlightColor {
+		t.Errorf("arrow's wing area (%d,%d) = %v, want highlight color %v — the arrowhead should extend beyond the bare shaft", probeX, probeY, arrowWing, highlightColor)
+	}
+}
+
+// TestRenderAnnotationsAnnotatedFalseSuppressesBadge confirms decision
+// #30's default: a shape with Annotated: false draws its outline but no
+// numbered badge at all — the corner where the badge would otherwise
+// sit (the shape's own X,Y) stays untouched.
+func TestRenderAnnotationsAnnotatedFalseSuppressesBadge(t *testing.T) {
+	original := color.RGBA{R: 10, G: 20, B: 30, A: 255}
+	src := solidTestImage(t, original)
+
+	ann := Annotation{Number: 3, X: 20, Y: 20, W: 50, H: 50, Annotated: false}
+	edited, err := RenderAnnotations(src, []Annotation{ann})
+	if err != nil {
+		t.Fatalf("RenderAnnotations: %v", err)
+	}
+	img := decodePNG(t, edited)
+
+	// The border should still be there (Annotated only gates the badge).
+	br, bg, bb, ba := img.At(20, 45).RGBA()
+	border := color.RGBA{R: uint8(br >> 8), G: uint8(bg >> 8), B: uint8(bb >> 8), A: uint8(ba >> 8)}
+	if border != highlightColor {
+		t.Errorf("border with Annotated: false = %v, want it still drawn (highlight color)", border)
+	}
+
+	// The badge (a filled disc at the shape's X,Y) should NOT be there —
+	// check the exact center point, which the badge would fill solid.
+	cr, cg, cb, ca := img.At(20, 20).RGBA()
+	center := color.RGBA{R: uint8(cr >> 8), G: uint8(cg >> 8), B: uint8(cb >> 8), A: uint8(ca >> 8)}
+	if center == badgeTextColor || (center.R > original.R && center != highlightColor) {
+		t.Errorf("badge area (20,20) with Annotated: false = %v, want no badge drawn there at all", center)
+	}
+}
+
+// TestShapeKindLegacyPointsWithNoKindIsFreehand confirms data saved
+// before the Kind field existed — Kind == "" with non-empty Points, the
+// only thing that combination could ever have meant pre-decision-#30 —
+// still resolves to "freehand", not the "rect" fallback that empty Kind
+// would otherwise mean for a box shape with no Points.
+func TestShapeKindLegacyPointsWithNoKindIsFreehand(t *testing.T) {
+	legacy := Annotation{Points: []Point{{X: 0, Y: 0}, {X: 10, Y: 10}}}
+	if got := shapeKind(legacy); got != "freehand" {
+		t.Errorf("shapeKind(legacy Points, no Kind) = %q, want %q", got, "freehand")
+	}
+	plainRect := Annotation{}
+	if got := shapeKind(plainRect); got != "rect" {
+		t.Errorf("shapeKind(no Points, no Kind) = %q, want %q", got, "rect")
 	}
 }

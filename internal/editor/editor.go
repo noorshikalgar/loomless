@@ -255,19 +255,25 @@ func NewHandler(name string) (http.Handler, error) {
 		history.push(body.Index, before)
 		writeStep(w, body.Index)
 	})
-	// /api/annotation creates either a rectangle highlight (Points
-	// omitted) or a freehand stroke (Points given, decision #27) — one
-	// endpoint for both, matching AddAnnotation itself handling both
-	// rather than a parallel /api/annotation/freehand.
+	// /api/annotation creates any of the five shape kinds (decision #30:
+	// rect/circle — box shapes, X/Y/W/H given; line/arrow/freehand — path
+	// shapes, Points given) — one endpoint for all of them, matching
+	// AddAnnotation itself handling every kind rather than a parallel
+	// endpoint per shape. Annotated defaults to false at the JSON level
+	// (Go's zero value for an omitted bool) — a freshly drawn shape has
+	// no badge until the editor's per-shape toolbar explicitly turns one
+	// on via a later /api/annotation/update call.
 	mux.HandleFunc("POST /api/annotation", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Index  int             `json:"index"`
-			X      float64         `json:"x"`
-			Y      float64         `json:"y"`
-			W      float64         `json:"w"`
-			H      float64         `json:"h"`
-			Color  string          `json:"color"`
-			Points []session.Point `json:"points"`
+			Index     int             `json:"index"`
+			X         float64         `json:"x"`
+			Y         float64         `json:"y"`
+			W         float64         `json:"w"`
+			H         float64         `json:"h"`
+			Color     string          `json:"color"`
+			Kind      string          `json:"kind"`
+			Points    []session.Point `json:"points"`
+			Annotated bool            `json:"annotated"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -278,7 +284,11 @@ func NewHandler(name string) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		created, _, err := session.AddAnnotation(name, body.Index, body.X, body.Y, body.W, body.H, body.Color, body.Points)
+		shape := session.AnnotationShape{
+			X: body.X, Y: body.Y, W: body.W, H: body.H,
+			Color: body.Color, Kind: body.Kind, Points: body.Points, Annotated: body.Annotated,
+		}
+		created, _, err := session.AddAnnotation(name, body.Index, shape)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -287,17 +297,25 @@ func NewHandler(name string) (http.Handler, error) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(created)
 	})
+	// /api/annotation/update always takes the shape's FULL current
+	// state, not a partial patch — every commit path in the editor
+	// (drag, resize, renumber, recolor, and toggling the annotated
+	// badge) resends everything, per UpdateAnnotation's own doc comment
+	// on why a partial merge here would be a bug generator, not a
+	// convenience.
 	mux.HandleFunc("POST /api/annotation/update", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Index  int             `json:"index"`
-			ID     int             `json:"id"`
-			X      float64         `json:"x"`
-			Y      float64         `json:"y"`
-			W      float64         `json:"w"`
-			H      float64         `json:"h"`
-			Number int             `json:"number"`
-			Color  string          `json:"color"`
-			Points []session.Point `json:"points"`
+			Index     int             `json:"index"`
+			ID        int             `json:"id"`
+			X         float64         `json:"x"`
+			Y         float64         `json:"y"`
+			W         float64         `json:"w"`
+			H         float64         `json:"h"`
+			Number    int             `json:"number"`
+			Color     string          `json:"color"`
+			Kind      string          `json:"kind"`
+			Points    []session.Point `json:"points"`
+			Annotated bool            `json:"annotated"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -308,7 +326,11 @@ func NewHandler(name string) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if _, err := session.UpdateAnnotation(name, body.Index, body.ID, body.X, body.Y, body.W, body.H, body.Number, body.Color, body.Points); err != nil {
+		shape := session.AnnotationShape{
+			X: body.X, Y: body.Y, W: body.W, H: body.H,
+			Color: body.Color, Kind: body.Kind, Points: body.Points, Annotated: body.Annotated,
+		}
+		if _, err := session.UpdateAnnotation(name, body.Index, body.ID, body.Number, shape); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

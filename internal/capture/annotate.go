@@ -39,17 +39,50 @@ const (
 // Annotation is the subset of session.Annotation this package needs —
 // duplicated rather than imported to avoid a capture->session dependency
 // (session already imports capture for Redact/RenderAnnotations; the
-// reverse would cycle). Field order/names match session.Annotation.
+// reverse would cycle). Field order/names match session.Annotation,
+// with one deliberate difference: Annotated here is a plain bool, not a
+// *bool — session.Annotation's nil-means-legacy-true convention exists
+// entirely to keep old session.json files loading correctly, and
+// export/image.go's toCaptureAnnotations is the one place that
+// resolves it (via session.Annotation.IsAnnotated()) before values ever
+// reach this package, so by the time RenderAnnotations sees Annotated,
+// false always genuinely means "don't draw the badge."
 type Annotation struct {
 	Number int
 	X, Y   float64
 	W, H   float64
 	Color  string // "#rrggbb", or "" for the default (see parseAnnotationColor)
-	// Points, when non-empty, makes this a freehand stroke drawn as a
-	// connected path instead of a rectangle outline — X/Y/W/H is still
-	// its bounding box, used for the badge's position exactly like a
-	// rectangle annotation's.
+	// Points holds a path shape's vertices: every point for "freehand",
+	// exactly two (start, end) for "line"/"arrow". Empty for a box shape
+	// ("rect"/"circle" — X/Y/W/H is the drawn rectangle instead). For
+	// every kind, X/Y/W/H is also the shape's bounding box, used for the
+	// badge's position regardless of kind.
 	Points []Point
+	// Kind selects how the shape renders: "" or "rect" (rectangle
+	// border), "circle" (ellipse inscribed in X/Y/W/H), "line" or
+	// "arrow" (segment through Points[0]/Points[1] — arrow adds an
+	// arrowhead), or "freehand" (path through every Points entry). See
+	// shapeKind for how "" + non-empty Points (every annotation kind
+	// this package could produce before Kind existed) resolves.
+	Kind string
+	// Annotated is whether the numbered badge is drawn at all — see
+	// this struct's own doc comment for why it's a plain bool here.
+	Annotated bool
+}
+
+// shapeKind resolves an annotation's effective shape kind, folding in
+// the one backward-compatibility rule needed for data saved before Kind
+// existed: Kind == "" with non-empty Points was always a freehand
+// stroke (the only thing empty-Kind-with-Points could have meant), and
+// Kind == "" with no Points was always a rectangle.
+func shapeKind(a Annotation) string {
+	if a.Kind != "" {
+		return a.Kind
+	}
+	if len(a.Points) > 0 {
+		return "freehand"
+	}
+	return "rect"
 }
 
 // Point mirrors session.Point — duplicated for the same reason
@@ -117,13 +150,27 @@ func RenderAnnotations(pngData []byte, annotations []Annotation) ([]byte, error)
 
 	for _, a := range annotations {
 		c := parseAnnotationColor(a.Color)
-		if len(a.Points) > 0 {
+		switch shapeKind(a) {
+		case "circle":
+			drawEllipseBorder(rgba, a.X+a.W/2, a.Y+a.H/2, a.W/2, a.H/2, annotationBorderThickness, c)
+		case "line":
 			drawPolyline(rgba, a.Points, freehandStrokeThickness, c)
-		} else {
+		case "arrow":
+			drawPolyline(rgba, a.Points, freehandStrokeThickness, c)
+			if len(a.Points) >= 2 {
+				drawArrowhead(rgba, a.Points[0], a.Points[len(a.Points)-1], freehandStrokeThickness, c)
+			}
+		case "freehand":
+			drawPolyline(rgba, a.Points, freehandStrokeThickness, c)
+		default: // "rect"
 			drawRectBorder(rgba, a.X, a.Y, a.X+a.W, a.Y+a.H, annotationBorderThickness, c)
 		}
-		drawFilledCircle(rgba, a.X, a.Y, annotationBadgeRadius, c)
-		drawCenteredNumber(rgba, a.X, a.Y, a.Number)
+		// A shape's badge is opt-in (decision #30) — most drawn shapes
+		// are plain markup, not part of a numbered callout sequence.
+		if a.Annotated {
+			drawFilledCircle(rgba, a.X, a.Y, annotationBadgeRadius, c)
+			drawCenteredNumber(rgba, a.X, a.Y, a.Number)
+		}
 	}
 
 	var out bytes.Buffer
@@ -392,6 +439,56 @@ func drawPolyline(img *image.RGBA, points []Point, thickness float64, c color.RG
 			t := float64(s) / float64(steps)
 			drawFilledCircle(img, a.X+(b.X-a.X)*t, a.Y+(b.Y-a.Y)*t, r, c)
 		}
+	}
+}
+
+// drawEllipseBorder strokes the outline of the ellipse inscribed in a
+// bounding box centered at (cx, cy) with radii (rx, ry) — sampled via
+// the same overlapping-stamped-circles technique drawPolyline already
+// uses for a stroke, walking the parametric ellipse and stamping a
+// filled circle at each angle, rather than a distance-field approach:
+// rx and ry can differ (a non-uniform ellipse), and there's no single
+// "distance from the boundary" that works the same in both axes without
+// extra math this sidesteps entirely by construction.
+func drawEllipseBorder(img *image.RGBA, cx, cy, rx, ry, thickness float64, c color.RGBA) {
+	if rx <= 0 || ry <= 0 {
+		return
+	}
+	r := thickness / 2
+	// Ramanujan's circumference approximation picks a step count that
+	// keeps stamped circles overlapping all the way around regardless of
+	// how elongated the ellipse is — the same spacing goal drawPolyline
+	// uses along a straight segment, just applied around a curve.
+	h := math.Pow(rx-ry, 2) / math.Pow(rx+ry, 2)
+	circumference := math.Pi * (rx + ry) * (1 + 3*h/(10+math.Sqrt(4-3*h)))
+	steps := int(math.Ceil(circumference / (r * 0.5)))
+	if steps < 32 {
+		steps = 32
+	}
+	for i := 0; i <= steps; i++ {
+		theta := 2 * math.Pi * float64(i) / float64(steps)
+		drawFilledCircle(img, cx+rx*math.Cos(theta), cy+ry*math.Sin(theta), r, c)
+	}
+}
+
+// drawArrowhead draws two short wings at `to`, angled back toward
+// `from` — composed from drawPolyline itself (each wing is just another
+// two-point stroke) rather than a dedicated triangle rasterizer, the
+// same "reuse the existing stroke primitive" choice drawPolyline made
+// for drawFilledCircle.
+func drawArrowhead(img *image.RGBA, from, to Point, thickness float64, c color.RGBA) {
+	const wingAngle = math.Pi / 7 // ~25.7 degrees off the shaft
+	const wingLength = 14.0
+
+	dx, dy := to.X-from.X, to.Y-from.Y
+	if math.Hypot(dx, dy) < 1 {
+		return
+	}
+	angle := math.Atan2(dy, dx)
+	for _, sign := range [2]float64{1, -1} {
+		wingDir := angle + math.Pi - sign*wingAngle
+		wing := Point{X: to.X + wingLength*math.Cos(wingDir), Y: to.Y + wingLength*math.Sin(wingDir)}
+		drawPolyline(img, []Point{to, wing}, thickness, c)
 	}
 }
 

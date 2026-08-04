@@ -345,7 +345,7 @@ func TestAddAnnotationFreehandComputesBoundingBox(t *testing.T) {
 	}
 
 	points := []Point{{X: 10, Y: 10}, {X: 50, Y: 30}, {X: 20, Y: 60}}
-	created, _, err := AddAnnotation("freehand", step.Index, 999, 999, 999, 999, "", points)
+	created, _, err := AddAnnotation("freehand", step.Index, AnnotationShape{X: 999, Y: 999, W: 999, H: 999, Kind: "freehand", Points: points})
 	if err != nil {
 		t.Fatalf("AddAnnotation: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestAddAnnotationRectangleUnaffectedByFreehandChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendStep: %v", err)
 	}
-	created, _, err := AddAnnotation("rect", step.Index, 5, 15, 100, 60, "", nil)
+	created, _, err := AddAnnotation("rect", step.Index, AnnotationShape{X: 5, Y: 15, W: 100, H: 60, Kind: "rect"})
 	if err != nil {
 		t.Fatalf("AddAnnotation: %v", err)
 	}
@@ -390,13 +390,13 @@ func TestUpdateAnnotationFreehandMoveRecomputesBoundingBox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendStep: %v", err)
 	}
-	created, _, err := AddAnnotation("movefreehand", step.Index, 0, 0, 0, 0, "", []Point{{X: 0, Y: 0}, {X: 10, Y: 10}})
+	created, _, err := AddAnnotation("movefreehand", step.Index, AnnotationShape{Kind: "freehand", Points: []Point{{X: 0, Y: 0}, {X: 10, Y: 10}}})
 	if err != nil {
 		t.Fatalf("AddAnnotation: %v", err)
 	}
 
 	moved := []Point{{X: 100, Y: 100}, {X: 110, Y: 110}}
-	s, err := UpdateAnnotation("movefreehand", step.Index, created.ID, 0, 0, 0, 0, created.Number, "", moved)
+	s, err := UpdateAnnotation("movefreehand", step.Index, created.ID, created.Number, AnnotationShape{Kind: "freehand", Points: moved})
 	if err != nil {
 		t.Fatalf("UpdateAnnotation: %v", err)
 	}
@@ -419,11 +419,11 @@ func TestUpdateAnnotationRectangleDoesNotTouchPoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendStep: %v", err)
 	}
-	created, _, err := AddAnnotation("rectmove", step.Index, 0, 0, 10, 10, "", nil)
+	created, _, err := AddAnnotation("rectmove", step.Index, AnnotationShape{X: 0, Y: 0, W: 10, H: 10, Kind: "rect"})
 	if err != nil {
 		t.Fatalf("AddAnnotation: %v", err)
 	}
-	s, err := UpdateAnnotation("rectmove", step.Index, created.ID, 5, 5, 20, 20, created.Number, "", nil)
+	s, err := UpdateAnnotation("rectmove", step.Index, created.ID, created.Number, AnnotationShape{X: 5, Y: 5, W: 20, H: 20, Kind: "rect"})
 	if err != nil {
 		t.Fatalf("UpdateAnnotation: %v", err)
 	}
@@ -627,5 +627,142 @@ func TestInsertContentStepWithNoPriorDisplayOrderSynthesizesOneFirst(t *testing.
 		if s.DisplayOrder[i] != idx {
 			t.Errorf("DisplayOrder[%d] = %d, want %d", i, s.DisplayOrder[i], idx)
 		}
+	}
+}
+
+// TestAnnotationIsAnnotatedNilMeansLegacyTrue confirms an annotation
+// loaded from a session.json written before the Annotated field existed
+// (Annotated == nil, since the JSON key was simply never present)
+// still reports itself as annotated — the whole point of using *bool
+// instead of bool is that every annotation saved under the old rules
+// (where a badge was always shown) must keep showing one, not silently
+// lose it the moment this field was added.
+func TestAnnotationIsAnnotatedNilMeansLegacyTrue(t *testing.T) {
+	legacy := Annotation{ID: 1, Number: 1, X: 0, Y: 0, W: 10, H: 10}
+	if !legacy.IsAnnotated() {
+		t.Error("Annotation with Annotated == nil (legacy data) reports IsAnnotated() == false, want true")
+	}
+
+	on := true
+	if annotated := (Annotation{Annotated: &on}); !annotated.IsAnnotated() {
+		t.Error("Annotation with Annotated == &true reports IsAnnotated() == false, want true")
+	}
+	off := false
+	if unannotated := (Annotation{Annotated: &off}); unannotated.IsAnnotated() {
+		t.Error("Annotation with Annotated == &false reports IsAnnotated() == true, want false")
+	}
+}
+
+// TestAddAnnotationRespectsShapeAnnotated confirms a newly created
+// shape's badge visibility comes from exactly what the caller asked
+// for (decision #30: a shape defaults to NOT annotated unless the
+// caller explicitly says otherwise — e.g. the click daemon's automatic
+// ring, which always wants one) — not silently defaulted true the way
+// every annotation used to be before this feature existed.
+func TestAddAnnotationRespectsShapeAnnotated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("shapeflag"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("shapeflag", "note", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+
+	unannotated, _, err := AddAnnotation("shapeflag", step.Index, AnnotationShape{X: 0, Y: 0, W: 10, H: 10, Kind: "rect", Annotated: false})
+	if err != nil {
+		t.Fatalf("AddAnnotation (unannotated): %v", err)
+	}
+	if unannotated.IsAnnotated() {
+		t.Error("shape created with Annotated: false reports IsAnnotated() == true")
+	}
+	if unannotated.Annotated == nil {
+		t.Error("shape created with Annotated: false has a nil Annotated pointer, want an explicit &false (nil is reserved for legacy data)")
+	}
+
+	annotated, _, err := AddAnnotation("shapeflag", step.Index, AnnotationShape{X: 0, Y: 0, W: 10, H: 10, Kind: "rect", Annotated: true})
+	if err != nil {
+		t.Fatalf("AddAnnotation (annotated): %v", err)
+	}
+	if !annotated.IsAnnotated() {
+		t.Error("shape created with Annotated: true reports IsAnnotated() == false")
+	}
+}
+
+// TestUpdateAnnotationTogglesAnnotated confirms the annotated flag
+// round-trips through an update the same way position/color/kind do —
+// this is the mechanism the editor's per-shape "add annotation" toggle
+// button relies on.
+func TestUpdateAnnotationTogglesAnnotated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("toggleflag"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("toggleflag", "note", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+	created, _, err := AddAnnotation("toggleflag", step.Index, AnnotationShape{X: 0, Y: 0, W: 10, H: 10, Kind: "rect", Annotated: false})
+	if err != nil {
+		t.Fatalf("AddAnnotation: %v", err)
+	}
+
+	s, err := UpdateAnnotation("toggleflag", step.Index, created.ID, 5, AnnotationShape{X: 0, Y: 0, W: 10, H: 10, Kind: "rect", Annotated: true})
+	if err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+	got := s.Steps[0].Annotations[0]
+	if !got.IsAnnotated() || got.Number != 5 {
+		t.Errorf("after toggling on: IsAnnotated()=%v Number=%d, want true 5", got.IsAnnotated(), got.Number)
+	}
+
+	reloaded, _, err := Load("toggleflag")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !reloaded.Steps[0].Annotations[0].IsAnnotated() {
+		t.Error("reloaded annotation lost its annotated=true state — not persisted")
+	}
+}
+
+// TestAddAnnotationShapeKindsPersist confirms Kind round-trips through
+// save/reload for every new shape kind, not just rect/freehand —
+// covers the actual new surface decision #30 added (circle/line/arrow).
+func TestAddAnnotationShapeKindsPersist(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("kinds"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step, err := AppendStep("kinds", "note", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+
+	if _, _, err := AddAnnotation("kinds", step.Index, AnnotationShape{X: 0, Y: 0, W: 40, H: 30, Kind: "circle"}); err != nil {
+		t.Fatalf("AddAnnotation circle: %v", err)
+	}
+	if _, _, err := AddAnnotation("kinds", step.Index, AnnotationShape{Kind: "line", Points: []Point{{X: 0, Y: 0}, {X: 50, Y: 50}}}); err != nil {
+		t.Fatalf("AddAnnotation line: %v", err)
+	}
+	if _, _, err := AddAnnotation("kinds", step.Index, AnnotationShape{Kind: "arrow", Points: []Point{{X: 0, Y: 0}, {X: 50, Y: 50}}}); err != nil {
+		t.Fatalf("AddAnnotation arrow: %v", err)
+	}
+
+	reloaded, _, err := Load("kinds")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	anns := reloaded.Steps[0].Annotations
+	if len(anns) != 3 {
+		t.Fatalf("got %d annotations, want 3", len(anns))
+	}
+	wantKinds := []string{"circle", "line", "arrow"}
+	for i, want := range wantKinds {
+		if anns[i].Kind != want {
+			t.Errorf("annotation %d Kind = %q, want %q", i, anns[i].Kind, want)
+		}
+	}
+	if anns[1].W != 50 || anns[1].H != 50 {
+		t.Errorf("line annotation bounding box = (%v,%v), want derived (50,50) from its two points", anns[1].W, anns[1].H)
 	}
 }
