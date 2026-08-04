@@ -182,3 +182,57 @@ func TestRenderAnnotationsEmptyListReturnsInputUnchanged(t *testing.T) {
 		t.Error("RenderAnnotations with no annotations should return the input unchanged, got different bytes")
 	}
 }
+
+// TestRenderAnnotationsUsesPerAnnotationColor confirms two annotations
+// with different Color values on the same image actually render in
+// different colors — the whole point of a color picker is that it's
+// per-annotation, not a single image-wide setting.
+func TestRenderAnnotationsUsesPerAnnotationColor(t *testing.T) {
+	src := solidTestImage(t, color.RGBA{R: 10, G: 20, B: 30, A: 255})
+
+	blue := Annotation{Number: 1, X: 10, Y: 10, W: 30, H: 30, Color: "#1e90ff"}
+	green := Annotation{Number: 2, X: 60, Y: 10, W: 30, H: 30, Color: "#00ff00"}
+	edited, err := RenderAnnotations(src, []Annotation{blue, green})
+	if err != nil {
+		t.Fatalf("RenderAnnotations: %v", err)
+	}
+	img := decodePNG(t, edited)
+
+	wantBlue := color.RGBA{R: 0x1e, G: 0x90, B: 0xff, A: 255}
+	r, g, b, a := img.At(10, 25).RGBA() // left border of the blue rect
+	got := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got != wantBlue {
+		t.Errorf("first annotation's border = %v, want its own color %v", got, wantBlue)
+	}
+
+	wantGreen := color.RGBA{R: 0, G: 255, B: 0, A: 255}
+	r, g, b, a = img.At(60, 25).RGBA() // left border of the green rect
+	got = color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+	if got != wantGreen {
+		t.Errorf("second annotation's border = %v, want its own color %v", got, wantGreen)
+	}
+}
+
+func TestParseAnnotationColor(t *testing.T) {
+	cases := []struct {
+		name string
+		hex  string
+		want color.RGBA
+	}{
+		{"empty falls back to default", "", highlightColor},
+		{"with hash", "#00ff00", color.RGBA{R: 0, G: 255, B: 0, A: 255}},
+		{"without hash", "00ff00", color.RGBA{R: 0, G: 255, B: 0, A: 255}},
+		{"uppercase", "#00FF00", color.RGBA{R: 0, G: 255, B: 0, A: 255}},
+		{"too short falls back", "#fff", highlightColor},
+		{"too long falls back", "#00ff0000", highlightColor},
+		{"non-hex garbage falls back", "not-a-color", highlightColor},
+		{"javascript-injection-shaped string falls back", "javascript:alert(1)", highlightColor},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseAnnotationColor(tc.hex); got != tc.want {
+				t.Errorf("parseAnnotationColor(%q) = %v, want %v", tc.hex, got, tc.want)
+			}
+		})
+	}
+}

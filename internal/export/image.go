@@ -34,7 +34,7 @@ func stepHeading(step session.Step, position int) string {
 func toCaptureAnnotations(anns []session.Annotation) []capture.Annotation {
 	out := make([]capture.Annotation, len(anns))
 	for i, a := range anns {
-		out[i] = capture.Annotation{Number: a.Number, X: a.X, Y: a.Y, W: a.W, H: a.H}
+		out[i] = capture.Annotation{Number: a.Number, X: a.X, Y: a.Y, W: a.W, H: a.H, Color: a.Color}
 	}
 	return out
 }

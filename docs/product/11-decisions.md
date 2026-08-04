@@ -1393,6 +1393,86 @@ theoretically).
    the test harness (not the product) made the real behavior visible and
    correct.
 
+## 25. Per-annotation highlight color
+
+Decided 2026-08-04 — the last of the deferred items from decision #19's
+follow-up list ("color changing for highlights"), picked up now that the
+foundation (unified history, live editing) it was explicitly deferred
+behind is solid. Every annotation used to render in one fixed color
+(macOS system red) with no way to change it.
+
+**`session.Annotation` gained `Color string`** — a `"#rrggbb"` hex
+string, `omitempty` so every annotation created before this field existed
+(no `Color` key in old `session.json` files) keeps rendering exactly the
+color it always did rather than an unset/invalid one. `AddAnnotation` and
+`UpdateAnnotation` both take a `color` parameter now; the click daemon's
+automatic ring passes `""` (default), matching its existing look
+unchanged.
+
+**`capture.Annotation` and `RenderAnnotations`** carry `Color` through to
+actual pixels, via a new `parseAnnotationColor(hex string) color.RGBA`
+that falls back to the default highlight color for anything empty or
+malformed. This mattered more than a passing glance suggests: a stored
+color is user-supplied free text that travels all the way from a
+browser's `<input type="color">` through an HTTP request body to disk and
+back — `""`, a 3-digit shorthand, garbage text, even something
+injection-shaped like `"javascript:alert(1)"` all have to degrade to a
+sane rendered color, never panic or corrupt the image. `RenderAnnotations`
+now resolves each annotation's own color independently in the same loop
+that already draws its border/badge — the loop was per-annotation before
+this change too, so drawing a different actual color per iteration was a
+small addition to an already-correct structure, not a redesign.
+
+**Editor UI**: a native `<input type="color">` in the same floating
+per-annotation toolbar decision #20 built (renumber/reorder/delete),
+committing on `change` the same way renumbering already does. Two things
+worth being explicit about, because they're exactly the kind of thing
+that's easy to get subtly wrong:
+
+- Every place that reads "this annotation's color" — the inline style
+  applied to the border and badge, the color input's initial value, the
+  value sent back to the API — goes through one small `color()` helper
+  that resolves `ann.color || DEFAULT_ANNOTATION_COLOR` once, so display
+  and persistence can never silently disagree about what "unset" means.
+- `UpdateAnnotation` *replaces* an annotation's stored color with
+  whatever the request sends — there's no "leave color alone if not
+  specified" merge behavior. That means every commit path (drag/resize,
+  renumber, and the new color change itself) has to explicitly resend
+  `ann.color` every time, or a plain drag would silently reset a
+  carefully chosen custom color back to the default. All three call
+  sites in `html.go` were updated together for exactly this reason.
+
+**Verified:**
+
+1. Unit tests: `TestParseAnnotationColor` (with/without a leading `#`,
+   uppercase hex, too-short/too-long strings, non-hex garbage, and an
+   injection-shaped string — all fall back to the default except the two
+   genuinely valid forms), `TestRenderAnnotationsUsesPerAnnotationColor`
+   (two annotations with different colors on the same image actually
+   render as two different colors, not one image-wide setting bleeding
+   across both).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Live browser verification against a real session: confirmed the color
+   input renders inside the hover/pinned toolbar at the correct default
+   value; changed it and confirmed via `GET /api/session` that the new
+   hex value actually persisted, and via `getComputedStyle` that the
+   border and badge updated live in the DOM without a reload; renumbered
+   the same annotation afterward and confirmed the color survived (the
+   exact regression the "every commit path must resend color" note above
+   exists to prevent); called `/api/undo` and confirmed the restored
+   snapshot carried the correct color, proving color rides along
+   correctly inside the unified history from decision #19 rather than
+   needing its own separate tracking. Also flattened a real export to PDF
+   and rasterized it — the annotation on the actual exported page
+   genuinely renders blue, not just in the editor overlay. This step
+   produced a real false alarm worth recording: an unrelated red circle
+   that happened to be part of a *different* step's captured screenshot
+   content (visible on a different page) was mistaken for the annotation
+   badge on first look, since both are small red circles in a similar
+   position — resolved by checking which heading was actually above the
+   screenshot being inspected, not by trusting "it's red, that must be
+   my bug."
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

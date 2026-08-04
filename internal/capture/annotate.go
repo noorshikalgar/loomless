@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"math"
 	"strconv"
+	"strings"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -23,6 +24,12 @@ import (
 var highlightColor = color.RGBA{R: 255, G: 59, B: 48, A: 255} // macOS system red
 var badgeTextColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
 
+// DefaultAnnotationColor is the "#rrggbb" hex string form of
+// highlightColor — exported so callers (session.Annotation's doc
+// comment, the editor's color-picker default) can refer to the same
+// value by name instead of duplicating the literal.
+const DefaultAnnotationColor = "#ff3b30"
+
 const (
 	annotationBorderThickness = 3.0
 	annotationBadgeRadius     = 11.0
@@ -36,6 +43,31 @@ type Annotation struct {
 	Number int
 	X, Y   float64
 	W, H   float64
+	Color  string // "#rrggbb", or "" for the default (see parseAnnotationColor)
+}
+
+// parseAnnotationColor turns a "#rrggbb" (or "rrggbb", case-insensitive)
+// hex string into an opaque color.RGBA, falling back to the default
+// highlight color for anything empty or malformed — an annotation's
+// stored color is user-supplied free text that flows all the way from a
+// browser's <input type="color"> through an HTTP request body, so a
+// missing or garbled value must degrade to something reasonable, never
+// panic or corrupt rendering.
+func parseAnnotationColor(hex string) color.RGBA {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return highlightColor
+	}
+	v, err := strconv.ParseUint(hex, 16, 32)
+	if err != nil {
+		return highlightColor
+	}
+	return color.RGBA{
+		R: uint8(v >> 16),
+		G: uint8(v >> 8),
+		B: uint8(v),
+		A: 255,
+	}
 }
 
 // PixelSize returns a PNG's width and height in pixels, decoding just the
@@ -71,8 +103,9 @@ func RenderAnnotations(pngData []byte, annotations []Annotation) ([]byte, error)
 	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
 
 	for _, a := range annotations {
-		drawRectBorder(rgba, a.X, a.Y, a.X+a.W, a.Y+a.H, annotationBorderThickness, highlightColor)
-		drawFilledCircle(rgba, a.X, a.Y, annotationBadgeRadius, highlightColor)
+		c := parseAnnotationColor(a.Color)
+		drawRectBorder(rgba, a.X, a.Y, a.X+a.W, a.Y+a.H, annotationBorderThickness, c)
+		drawFilledCircle(rgba, a.X, a.Y, annotationBadgeRadius, c)
 		drawCenteredNumber(rgba, a.X, a.Y, a.Number)
 	}
 

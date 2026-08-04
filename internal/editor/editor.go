@@ -256,6 +256,7 @@ func NewHandler(name string) (http.Handler, error) {
 			Y     float64 `json:"y"`
 			W     float64 `json:"w"`
 			H     float64 `json:"h"`
+			Color string  `json:"color"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -266,7 +267,7 @@ func NewHandler(name string) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		created, _, err := session.AddAnnotation(name, body.Index, body.X, body.Y, body.W, body.H)
+		created, _, err := session.AddAnnotation(name, body.Index, body.X, body.Y, body.W, body.H, body.Color)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -284,6 +285,7 @@ func NewHandler(name string) (http.Handler, error) {
 			W      float64 `json:"w"`
 			H      float64 `json:"h"`
 			Number int     `json:"number"`
+			Color  string  `json:"color"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -294,7 +296,7 @@ func NewHandler(name string) (http.Handler, error) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if _, err := session.UpdateAnnotation(name, body.Index, body.ID, body.X, body.Y, body.W, body.H, body.Number); err != nil {
+		if _, err := session.UpdateAnnotation(name, body.Index, body.ID, body.X, body.Y, body.W, body.H, body.Number, body.Color); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

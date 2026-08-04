@@ -75,6 +75,12 @@ type Annotation struct {
 	Y      float64 `json:"y"`
 	W      float64 `json:"w"`
 	H      float64 `json:"h"`
+	// Color is a "#rrggbb" hex string, or empty for the default
+	// highlight color (capture.DefaultAnnotationColor) — every
+	// annotation created before this field existed has Color == "", so
+	// omitempty keeps old session.json files loading as the same
+	// visible color they always rendered, not an unset/invalid one.
+	Color string `json:"color,omitempty"`
 }
 
 // Session is one recording: a named, ordered sequence of steps.
@@ -831,11 +837,12 @@ func findStep(s *Session, stepIndex int) (*Step, error) {
 // number on that step — freely renumbered afterward via
 // UpdateAnnotation), logs the change, and saves. Used by both the click
 // daemon's automatic ring and the editor's manually-drawn highlights —
-// see decision #18. Returns the created Annotation directly (not just
-// buried in the returned Session) so a caller like the editor's API can
-// hand it straight back to the client without making the client guess
-// which entry in the step's list is the new one.
-func AddAnnotation(name string, stepIndex int, x, y, w, h float64) (Annotation, *Session, error) {
+// see decision #18. color is a "#rrggbb" hex string, or "" for the
+// default highlight color. Returns the created Annotation directly (not
+// just buried in the returned Session) so a caller like the editor's API
+// can hand it straight back to the client without making the client
+// guess which entry in the step's list is the new one.
+func AddAnnotation(name string, stepIndex int, x, y, w, h float64, color string) (Annotation, *Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
 		return Annotation{}, nil, err
@@ -854,7 +861,7 @@ func AddAnnotation(name string, stepIndex int, x, y, w, h float64) (Annotation, 
 			nextNumber = a.Number + 1
 		}
 	}
-	created := Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h}
+	created := Annotation{ID: nextID, Number: nextNumber, X: x, Y: y, W: w, H: h, Color: color}
 	target.Annotations = append(target.Annotations, created)
 
 	s.EditLog = append(s.EditLog, EditEntry{
@@ -940,10 +947,11 @@ func ReorderAnnotations(name string, stepIndex int, newOrder []int) (*Session, e
 }
 
 // UpdateAnnotation reloads the named session and replaces an existing
-// annotation's position, size, and display number — identified by its
-// stable ID, which never changes, not by its position in the list or its
-// (freely reassignable) Number.
-func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float64, number int) (*Session, error) {
+// annotation's position, size, display number, and color — identified by
+// its stable ID, which never changes, not by its position in the list or
+// its (freely reassignable) Number. color is a "#rrggbb" hex string, or
+// "" for the default highlight color.
+func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float64, number int, color string) (*Session, error) {
 	s, dir, err := Load(name)
 	if err != nil {
 		return nil, err
@@ -961,6 +969,7 @@ func UpdateAnnotation(name string, stepIndex, annotationID int, x, y, w, h float
 			target.Annotations[i].X, target.Annotations[i].Y = x, y
 			target.Annotations[i].W, target.Annotations[i].H = w, h
 			target.Annotations[i].Number = number
+			target.Annotations[i].Color = color
 			found = true
 			break
 		}

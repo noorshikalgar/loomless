@@ -87,6 +87,9 @@ const editorCSS = `
   .annotation.toolbar-below .annotation-toolbar { top: 100%; transform: translate(-50%, 10px); }
   .annotation-toolbar input[type=number] { width: 2.8rem; background: #17171a; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.15rem 0.3rem; font-size: 0.75rem; font-family: inherit; }
   .annotation-toolbar input::-webkit-inner-spin-button, .annotation-toolbar input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .annotation-toolbar input.annotation-color-input { -webkit-appearance: none; appearance: none; width: 22px; height: 22px; padding: 0; border: 1px solid #444; border-radius: 4px; cursor: pointer; background: none; }
+  .annotation-toolbar input.annotation-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+  .annotation-toolbar input.annotation-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
   .annotation-toolbar button { background: #333338; color: #f0f0f0; border: 1px solid #4a4a50; border-radius: 4px; width: 22px; height: 22px; font-size: 0.75rem; line-height: 1; cursor: pointer; padding: 0; }
   .annotation-toolbar button:hover { background: #45454c; }
   .annotation-toolbar button:disabled { opacity: 0.3; cursor: default; }
@@ -111,6 +114,11 @@ const editorCSS = `
 `
 
 const editorJS = `
+  // Matches capture.DefaultAnnotationColor (Go) exactly — an annotation
+  // with no stored color renders as this on both sides (editor overlay
+  // and every flattened export), so keep them in sync if either changes.
+  var DEFAULT_ANNOTATION_COLOR = '#ff3b30';
+
   var sessionData = null;
   // stepEditors maps a step index to live handles into that step's
   // already-rendered image editor DOM, so annotation and redaction edits
@@ -586,12 +594,21 @@ const editorJS = `
     var el = document.createElement('div');
     el.className = 'annotation';
 
+    // color() always resolves to a real, renderable value (never '' or
+    // undefined) so every place a color is read — inline styles here,
+    // the color-picker input's value, the API payload other commits send
+    // — agrees on what "this annotation's color" means. '' on disk means
+    // "use the default", not "no color set", so the fallback belongs
+    // here, once, rather than sprinkled at every call site.
+    function color() { return ann.color || DEFAULT_ANNOTATION_COLOR; }
+
     function place() {
       var topPct = ann.y / img.naturalHeight;
       el.style.left = (ann.x / img.naturalWidth * 100) + '%';
       el.style.top = (topPct * 100) + '%';
       el.style.width = (ann.w / img.naturalWidth * 100) + '%';
       el.style.height = (ann.h / img.naturalHeight * 100) + '%';
+      el.style.borderColor = color();
       // A toolbar floating above an annotation near the top of the image
       // would be clipped off the frame — flip it below instead.
       el.classList.toggle('toolbar-below', topPct < 0.08);
@@ -601,6 +618,7 @@ const editorJS = `
     var badge = document.createElement('span');
     badge.className = 'annotation-badge';
     badge.textContent = ann.number;
+    badge.style.background = color();
     el.appendChild(badge);
 
     var toolbar = document.createElement('div');
@@ -612,6 +630,13 @@ const editorJS = `
     numberInput.value = ann.number;
     numberInput.title = 'Renumber';
     toolbar.appendChild(numberInput);
+
+    var colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.className = 'annotation-color-input';
+    colorInput.value = color();
+    colorInput.title = 'Highlight color';
+    toolbar.appendChild(colorInput);
 
     var sep1 = document.createElement('span');
     sep1.className = 'toolbar-sep';
@@ -671,10 +696,26 @@ const editorJS = `
       var prev = ann.number;
       ann.number = number;
       badge.textContent = number;
-      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h, number: number})
+      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h, number: number, color: ann.color})
         .catch(function(e) { alert('Renumber failed: ' + e.message); ann.number = prev; badge.textContent = prev; numberInput.value = prev; });
     }
     numberInput.addEventListener('change', commitNumber);
+
+    function commitColor() {
+      var prev = ann.color;
+      ann.color = colorInput.value;
+      badge.style.background = color();
+      el.style.borderColor = color();
+      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h, number: ann.number, color: ann.color})
+        .catch(function(e) {
+          alert('Color change failed: ' + e.message);
+          ann.color = prev;
+          badge.style.background = color();
+          el.style.borderColor = color();
+          colorInput.value = color();
+        });
+    }
+    colorInput.addEventListener('change', commitColor);
 
     var handles = ['nw', 'ne', 'sw', 'se'].map(function(corner) {
       var h = document.createElement('div');
@@ -691,7 +732,7 @@ const editorJS = `
       var x = el.offsetLeft * sx, y = el.offsetTop * sy;
       var w = el.offsetWidth * sx, h = el.offsetHeight * sy;
       ann.x = x; ann.y = y; ann.w = w; ann.h = h;
-      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: ann.number})
+      api('POST', '/api/annotation/update', {index: step.index, id: ann.id, x: x, y: y, w: w, h: h, number: ann.number, color: ann.color})
         .catch(function(e) { alert('Update failed: ' + e.message); onStackChanged(); });
     }
 
