@@ -512,3 +512,120 @@ func assertIndexes(t *testing.T, steps []Step, want []int) {
 		}
 	}
 }
+
+// TestInsertContentStepLandsAtTheRequestedPosition confirms the new
+// step's index appears in DisplayOrder at exactly the requested slot —
+// not just appended to Steps, which is the mistake that would leave it
+// invisible in the editor (see VisibleSteps' comment on why every
+// consumer must go through DisplayOrder).
+func TestInsertContentStepLandsAtTheRequestedPosition(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("insertme"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	a, err := AppendStep("insertme", "a", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep a: %v", err)
+	}
+	b, err := AppendStep("insertme", "b", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep b: %v", err)
+	}
+
+	s, newIndex, err := InsertContentStep("insertme", 1)
+	if err != nil {
+		t.Fatalf("InsertContentStep: %v", err)
+	}
+	want := []int{a.Index, newIndex, b.Index}
+	if len(s.DisplayOrder) != 3 {
+		t.Fatalf("DisplayOrder = %v, want length 3", s.DisplayOrder)
+	}
+	for i, idx := range want {
+		if s.DisplayOrder[i] != idx {
+			t.Errorf("DisplayOrder[%d] = %d, want %d (full order %v)", i, s.DisplayOrder[i], idx, s.DisplayOrder)
+		}
+	}
+
+	var newStep *Step
+	for i := range s.Steps {
+		if s.Steps[i].Index == newIndex {
+			newStep = &s.Steps[i]
+		}
+	}
+	if newStep == nil {
+		t.Fatalf("new step %d not found in Steps", newIndex)
+	}
+	if !newStep.IsContent {
+		t.Error("inserted step IsContent = false, want true")
+	}
+	if newStep.Note != "" || newStep.ImageFile != "" || newStep.Command != "" {
+		t.Errorf("inserted step should be empty, got %+v", newStep)
+	}
+}
+
+// TestInsertContentStepClampsOutOfRangePosition confirms a position
+// beyond either end of the list is clamped to the nearest valid slot
+// rather than rejected — the frontend always derives position from its
+// own current rendering of the list, so there's no realistic "invalid"
+// value to guard against, only ends of the list.
+func TestInsertContentStepClampsOutOfRangePosition(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("clampme"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	a, err := AppendStep("clampme", "a", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep: %v", err)
+	}
+
+	s, newIndex, err := InsertContentStep("clampme", -5)
+	if err != nil {
+		t.Fatalf("InsertContentStep(-5): %v", err)
+	}
+	if len(s.DisplayOrder) != 2 || s.DisplayOrder[0] != newIndex || s.DisplayOrder[1] != a.Index {
+		t.Errorf("DisplayOrder after negative position = %v, want [%d %d]", s.DisplayOrder, newIndex, a.Index)
+	}
+
+	s, newIndex2, err := InsertContentStep("clampme", 999)
+	if err != nil {
+		t.Fatalf("InsertContentStep(999): %v", err)
+	}
+	last := len(s.DisplayOrder) - 1
+	if s.DisplayOrder[last] != newIndex2 {
+		t.Errorf("DisplayOrder after huge position = %v, want last element %d", s.DisplayOrder, newIndex2)
+	}
+}
+
+// TestInsertContentStepWithNoPriorDisplayOrderSynthesizesOneFirst
+// confirms a session that has never been explicitly reordered (so
+// DisplayOrder is still empty/nil on disk) still gets a correctly
+// ordered, fully-materialized DisplayOrder after an insert — not just
+// the two-element list you'd get from naively appending to a nil slice.
+func TestInsertContentStepWithNoPriorDisplayOrderSynthesizesOneFirst(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, _, err := Create("synthme"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	a, err := AppendStep("synthme", "a", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep a: %v", err)
+	}
+	b, err := AppendStep("synthme", "b", "", "", nil)
+	if err != nil {
+		t.Fatalf("AppendStep b: %v", err)
+	}
+
+	s, newIndex, err := InsertContentStep("synthme", 2)
+	if err != nil {
+		t.Fatalf("InsertContentStep: %v", err)
+	}
+	want := []int{a.Index, b.Index, newIndex}
+	if len(s.DisplayOrder) != len(want) {
+		t.Fatalf("DisplayOrder = %v, want %v", s.DisplayOrder, want)
+	}
+	for i, idx := range want {
+		if s.DisplayOrder[i] != idx {
+			t.Errorf("DisplayOrder[%d] = %d, want %d", i, s.DisplayOrder[i], idx)
+		}
+	}
+}

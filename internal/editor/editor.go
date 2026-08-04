@@ -23,22 +23,27 @@
 package editor
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/noorshikalgar/story/internal/session"
 )
 
 // imageFilePattern matches the only image filenames this project ever
-// produces (session.AddStep's "step-%04d.png") — used to reject the
+// produces — session.AddStep's "step-%04d.png" for captures, and
+// /api/upload-image's "content-<unixnano>.(png|jpg)" for images
+// inserted into a content step's Markdown body — used to reject the
 // /images/ route's filename parameter outright if it doesn't match,
 // rather than trying to sanitize an arbitrary path (no "..", no "/"
-// walking involved at all, since nothing but this shape is ever valid).
-var imageFilePattern = regexp.MustCompile(`^step-\d{4}\.png$`)
+// walking involved at all, since nothing but these two shapes is ever
+// valid).
+var imageFilePattern = regexp.MustCompile(`^(?:step-\d{4}|content-\d+)\.(?:png|jpg)$`)
 
 // NewHandler builds the editor's HTTP handler for a named session. Fails
 // fast if the session doesn't exist rather than serving a broken editor.
@@ -402,6 +407,76 @@ func NewHandler(name string) (http.Handler, error) {
 		}
 		history.push(body.Index, before)
 		writeStep(w, body.Index)
+	})
+	// /api/insert-step creates a new, empty IsContent step (decision #29)
+	// at an arbitrary position in the display order — the one kind of
+	// step creation the editor itself can do, as opposed to every other
+	// step which only ever arrives via live capture. Returns the whole
+	// session (position affects DisplayOrder, not just one step) plus
+	// the new step's index, so the frontend knows which card to focus.
+	mux.HandleFunc("POST /api/insert-step", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Position int `json:"position"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s, newIndex, err := session.InsertContentStep(name, body.Position)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			Session  *session.Session `json:"session"`
+			NewIndex int              `json:"new_index"`
+		}{s, newIndex})
+	})
+	// /api/upload-image stores an image a user pasted into a content
+	// step's Markdown body (via "Insert Image") — a plain file write, not
+	// a session.json mutation, so it doesn't go through internal/session
+	// at all: nothing about which images exist is tracked centrally, the
+	// same way a captured screenshot's presence is only ever implied by
+	// a Step.ImageFile reference. The frontend inserts the returned
+	// filename into the note's Markdown body itself (![](filename)) and
+	// the existing /api/caption endpoint persists that text — this
+	// endpoint's only job is getting the bytes safely onto disk with a
+	// name the frontend can reference. Data arrives as base64 JSON,
+	// matching every other endpoint in this file (all-JSON, no
+	// multipart handling to add just for this one case).
+	mux.HandleFunc("POST /api/upload-image", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Data string `json:"data"` // base64, no data: URI prefix
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		data, err := base64.StdEncoding.DecodeString(body.Data)
+		if err != nil {
+			http.Error(w, "invalid base64 image data: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var ext string
+		switch http.DetectContentType(data) {
+		case "image/png":
+			ext = ".png"
+		case "image/jpeg":
+			ext = ".jpg"
+		default:
+			http.Error(w, "unsupported image type — only PNG and JPEG are supported", http.StatusBadRequest)
+			return
+		}
+		filename := fmt.Sprintf("content-%d%s", time.Now().UnixNano(), ext)
+		if err := os.WriteFile(filepath.Join(dir, "images", filename), data, 0o644); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			Filename string `json:"filename"`
+		}{filepath.Join("images", filename)})
 	})
 	mux.HandleFunc("POST /api/undo", func(w http.ResponseWriter, r *http.Request) {
 		handleHistoryOp(w, r, name, history.undoStep, stepSnapshot, applySnapshot, "undo")

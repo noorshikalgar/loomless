@@ -89,7 +89,7 @@ func renderWindowStep(pdf *fpdf.Fpdf, step session.Step, dir string) {
 		pdf.MultiCell(0, 6, safe("Window: "+windowLine), "", "L", false)
 	}
 	if step.Note != "" {
-		writeNotePDF(pdf, step.Note)
+		writeNotePDF(pdf, step.Note, dir)
 	}
 	if step.ImageFile == "" {
 		return

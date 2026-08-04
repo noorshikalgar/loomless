@@ -1763,6 +1763,162 @@ so there's no risk of `closeFocusView` trying to reinsert into a parent
    same `closeFocusView` function; confirmed via `GET /api/session`
    that no stray edit state was left behind by the whole sequence.
 
+## 29. Freeform "content steps" — Markdown, images, and video/link embeds between captured steps
+
+Decided 2026-08-04, scoped with the user up front (two direct
+questions: what should v1 contain, and how should a content step be
+created) rather than guessing at what "rich text editor" meant — the
+previous note on this task flagged that ambiguity explicitly, and it
+was real: "rich text" could have meant anything from a plain textarea
+to a full WYSIWYG toolbar. Landed scope: Markdown text, uploaded
+images, and YouTube/Vimeo embeds; created via a "+ Insert step" control
+placed exactly where the user wants it in the story, not appended to
+the end.
+
+Thought through from the dev/QA side: a captured screenshot can't
+explain *why* a step matters, link out to a design doc, or point at a
+demo video — today the only place to add that is a step's caption,
+squeezed in alongside a screenshot it's not really about. A content
+step is for exactly that: an authored aside dropped between two real
+captures, e.g. "why this refactor was necessary" before the steps that
+show it, or a linked walkthrough video after a tricky one.
+
+**Reuses the existing Note/Markdown pipeline end to end rather than
+inventing a new content model.** A content step is still a `Step` (a
+`Session.Steps` entry, `DisplayOrder`-positioned, reorderable/hideable
+like any other) with no `Command`/`ImageFile`, its body living in the
+same `Note` field manual capture-time steps already use, rendered by
+the exact Markdown pipeline decision #22 built. The only new schema is
+one boolean, `Step.IsContent` (`omitempty`, false for every step before
+this existed) — it changes nothing about how a step *exports* (every
+exporter already only shows a window line `if step.WindowApp != ""`,
+which is already empty for an authored step), only how the *editor*
+displays it: skipping the "+ add app" window-info affordance that would
+otherwise invite attributing a paragraph of prose to an application.
+Reusing Note/Markdown instead of a parallel "content block" type meant
+"Markdown text" support needed zero new code — the entire feature
+reduced to insertion UX, image upload, and closing two real gaps the
+existing Markdown pipeline had never needed to cover before content
+steps made them visible (below).
+
+**`InsertContentStep(name, position)`** is the first place a step can
+land anywhere but the end — every prior creator (`AddStep`,
+`AddTerminalStep`) only ever appends, because live capture has no
+concept of "insert before step 3." It materializes `DisplayOrder`
+(synthesizing it from natural step order first, if never explicitly
+set) and splices the new index in at `position`, which is clamped
+rather than rejected — the frontend always derives it from its own
+current rendering of the list, so there's no realistic invalid value,
+only the two ends.
+
+**Uploaded images: a small, separately-scoped endpoint, not a Step
+field.** `/api/upload-image` writes PNG/JPEG bytes (base64 JSON body,
+matching this file's existing all-JSON convention — no multipart
+handling introduced for one endpoint) to the session's `images/`
+folder and returns a filename; the frontend inserts a plain
+`![](filename)` at the textarea's cursor and the *existing*
+`/api/caption` save persists it. No new field tracks "this step has
+these images" anywhere — exactly like a captured screenshot's presence
+is implied only by a `Step.ImageFile` reference, an uploaded image's
+presence is implied only by its Markdown reference inside `Note`.
+PNG/JPEG only (sniffed via `http.DetectContentType`, not trusted from
+the filename) is a deliberate, narrow v1 boundary, not a
+half-finished one — documented here rather than silently discovered.
+
+**Video/link embeds degrade by format, not by silently doing
+nothing.** A bare YouTube/Vimeo URL alone on its own line (the same
+"paste a link on its own line" convention Slack/Notion use) becomes a
+real `<iframe>` in Slides — the one export format actually capable of
+hosting one. PDF and Markdown structurally can't play a video, so the
+same line there stays a clickable link instead — which meant fixing
+two real, pre-existing gaps in `writeNotePDF` that this feature made
+visible for the first time (a caption had never needed either before):
+**(1)** a bare `https://…` URL (no `[text](url)` or `<url>` syntax)
+rendered as inert black text, not a link — fixed by switching both PDF
+and Slides' shared `mdParser` to goldmark's GFM `Linkify` extension.
+**(2)** an image reference inside a caption's Markdown wasn't rendered
+at all — `writeNotePDF`'s AST walker had no `*ast.Image` case, so it
+would have silently vanished from the one export format that embeds
+everything else as real content rather than links. Fixed with a
+`writeNoteImagePDF` helper mirroring `renderWindowStep`'s own
+screenshot-embedding logic (same width-scaling-to-fit-a-page approach)
+— a missing file renders a visible `[image missing: ...]` note rather
+than erroring, same failure-visibility choice the screenshot embed
+already makes. **(3)**, caught only during live verification, not code
+review: a Markdown heading (`## …`) had no `*ast.Heading` case either —
+its text ran directly into the next paragraph's text on the same line,
+with no space or break, because only `*ast.Paragraph` ever called
+`pdf.Ln()`. Fixed by giving headings the same bold treatment as
+`**bold**` text (reusing `boldDepth`) plus their own trailing break —
+deliberately not scaling font size per heading level, since making a
+heading merely *visible as a heading* was the actual defect; a full
+per-level type scale is a nicety for later, not a fix required now.
+
+**Slides' self-containment (screenshots embedded as data URIs, no
+`images/` folder needs to travel with the file — see `Slides`' own doc
+comment) extends to note-embedded images too.** `inlineLocalImages`
+rewrites a relative `![](filename)` reference into a `data:` URI before
+handing the note to goldmark, specifically for Slides — Markdown export
+needs the opposite treatment (a relative link, matching exactly how it
+already references every captured screenshot) and gets none, since
+that's already correct as-is. Getting this backwards would have meant
+an uploaded image looking fine in the editor and in Markdown export,
+then silently breaking the moment the self-contained Slides `.html`
+file was opened from anywhere other than right next to the session
+folder — exactly the kind of failure that's invisible until someone
+actually moves the file.
+
+**Verified:**
+
+1. Unit tests: `internal/session` (`InsertContentStep` lands the new
+   index at the exact requested `DisplayOrder` position — not just
+   appended, which is the specific mistake that would leave it
+   invisible in the editor per `VisibleSteps`' own comment; clamps an
+   out-of-range position instead of rejecting it; synthesizes
+   `DisplayOrder` correctly on a session that never had one set
+   explicitly). `internal/export` (`videoEmbedURL` recognizes YouTube
+   watch/short/embed URLs and Vimeo, and explicitly does NOT recognize
+   an unrelated or Loom link; a standalone video-URL line embeds while
+   surrounding paragraphs stay intact and a non-video link stays a
+   plain Linkify'd `<a>`; `inlineLocalImages` rewrites a genuinely local
+   reference to a data URI, leaves remote/already-`data:` references
+   untouched, and leaves a reference to a missing file as-is rather
+   than dropping it; `writeNotePDF` actually embeds a local image
+   (cursor advances by a block-sized amount, not a line's worth) and
+   shows a placeholder instead of erroring for a missing one; the
+   heading-separation regression test specifically pins "heading +
+   paragraph takes strictly more vertical space than the same words as
+   one flat paragraph," which is what the pre-fix run-together bug
+   would have failed).
+2. `go build/vet/gofmt` clean, full suite passing.
+3. Live browser verification against a real session: clicked "+ Insert
+   step," confirmed a new card appeared at exactly that position with
+   the textarea auto-focused and no window-info line shown; typed a
+   heading, bold text, a bare YouTube link on its own line, and a
+   Markdown link; drove the real "Insert Image" file input with a
+   synthetic `File`/`DataTransfer` (the same technique used for every
+   other browser-input test this session where no OS-level widget can
+   be driven) through the actual `FileReader` → base64 → `fetch` code
+   path — not a mocked shortcut — confirmed the uploaded file landed on
+   disk and a `![](...)` reference appeared at the cursor; saved and
+   confirmed via `GET /api/session` the note persisted exactly as
+   typed. Exported to all three formats and inspected each directly
+   rather than trusting "no error": Markdown export's raw `.md` file
+   contains the expected relative image link; the exported Slides
+   `.html`, loaded in a real browser, showed a genuinely live YouTube
+   `<iframe>` (the video's own "unavailable" message came from
+   YouTube's servers refusing to embed that specific video — direct
+   proof the iframe was actually querying YouTube, not a rendering
+   bug), the Markdown link as clickable text, and the uploaded image
+   rendered correctly; the exported PDF, rasterized with PyMuPDF (the
+   same pixel-level verification method used for every export-facing
+   feature this session), showed the heading properly bolded and
+   separated, both links genuinely blue and clickable, and the
+   uploaded image embedded as a real block image at the correct
+   position and scale — this rasterized check is what caught the
+   heading bug in the first place; it wasn't visible in the unit tests
+   until a regression test was written specifically to pin it after.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

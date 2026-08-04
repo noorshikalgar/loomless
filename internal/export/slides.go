@@ -59,7 +59,13 @@ func Slides(s *session.Session, dir string) ([]byte, error) {
 				fmt.Fprintf(&b, "<p class=\"window\">%s</p>\n", html.EscapeString(windowLine))
 			}
 			if step.Note != "" {
-				noteRendered, err := noteHTML(step.Note)
+				// inlineLocalImages first: a content step's Markdown may
+				// reference an uploaded image by relative filename, which
+				// only resolves next to the session folder — Slides is
+				// self-contained (see this file's own doc comment), so
+				// that reference has to become a data: URI, same as the
+				// step's own screenshot already does via imageDataURI.
+				noteRendered, err := noteHTMLWithVideoEmbeds(inlineLocalImages(step.Note, dir))
 				if err != nil {
 					fmt.Fprintf(&b, "<p class=\"note\">%s</p>\n", html.EscapeString(step.Note))
 				} else {
@@ -110,6 +116,9 @@ const slidesCSS = `<style>
   .note code { background: #26262b; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.92em; }
   .note a { color: #8ab4ff; }
   .note ul, .note ol { margin: 0 0 0.6em; padding-left: 1.4em; }
+  .note img { max-width: 100%; border-radius: 6px; margin: 0.4em 0; }
+  .video-embed { position: relative; width: 100%; max-width: 640px; margin: 0.6em 0; padding-top: 56.25%; }
+  .video-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 6px; }
   .exit { color: #ff8a8a; font-weight: 600; }
   img { max-width: 85vw; max-height: 60vh; border-radius: 6px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
   pre { max-width: 85vw; overflow-x: auto; text-align: left; background: #26262b; padding: 1rem; border-radius: 6px; font-size: 0.9rem; }

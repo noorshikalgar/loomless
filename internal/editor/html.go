@@ -133,6 +133,14 @@ const editorCSS = `
   .window-line input.window-app-input { font-weight: 600; color: #8ab4ff; width: 8rem; }
   .window-line input.window-title-input { font-weight: normal; color: #ccc; flex: 1; min-width: 0; }
   .window-line-sep { color: #666; }
+  /* A content step (decision #29) is visually distinguished only by a
+     subtle left accent — same card shape as every other step, since
+     it's still a first-class step (reorderable, hideable), just one
+     that was authored instead of captured. */
+  .step.content-step { border-left: 3px solid #8ab4ff; }
+  .insert-step-row { display: flex; justify-content: center; margin: -0.4rem 0 0.6rem; }
+  .insert-step-btn { background: transparent; border: 1px dashed #444; color: #777; border-radius: 4px; padding: 0.15rem 0.6rem; font-size: 0.75rem; cursor: pointer; }
+  .insert-step-btn:hover { border-color: #8ab4ff; color: #8ab4ff; }
   /* Focused/"modal" view for an image editor — see the openFocusView
      comment in editorJS for why this reparents the existing imgWrap
      rather than building a second editor. Fixed positioning means this
@@ -284,8 +292,11 @@ const editorJS = `
       // counted in the real (exported) numbering at all.
       var displayPos = hidden ? (visiblePos + 1) : visiblePos;
 
+      container.appendChild(buildInsertControl(pos));
+
       var el = document.createElement('div');
-      el.className = 'step' + (hidden ? ' hidden-step' : '');
+      el.className = 'step' + (hidden ? ' hidden-step' : '') + (step.is_content ? ' content-step' : '');
+      el.setAttribute('data-step-index', step.index);
 
       var header = document.createElement('div');
       header.className = 'step-header';
@@ -299,7 +310,14 @@ const editorJS = `
       header.appendChild(hideBtn);
       el.appendChild(header);
 
-      if (!step.command) {
+      // A content step (decision #29) is purely authored, with no
+      // captured window to attribute — showing the "+ add app"
+      // click-to-edit affordance there would invite the user to
+      // attribute a paragraph of prose to an application, which makes
+      // no sense. A real capture-time note step (no image, but still
+      // captured live) keeps the window line, since it may genuinely
+      // have — or be worth adding — real window context.
+      if (!step.command && !step.is_content) {
         el.appendChild(buildWindowLine(step));
       }
 
@@ -316,6 +334,7 @@ const editorJS = `
       } else {
         var ta = document.createElement('textarea');
         ta.value = step.note || '';
+        if (step.is_content) ta.placeholder = 'Write something in Markdown — headings, lists, links, images, a pasted YouTube/Vimeo link on its own line…';
         el.appendChild(ta);
 
         var row = document.createElement('div');
@@ -331,6 +350,7 @@ const editorJS = `
             setTimeout(function() { savedHint.classList.remove('show'); }, 1500);
           }).catch(function(e) { alert('Save failed: ' + e.message); });
         };
+        row.appendChild(buildInsertImageControl(ta));
         row.appendChild(savedHint);
         row.appendChild(saveBtn);
         el.appendChild(row);
@@ -342,6 +362,84 @@ const editorJS = `
 
       container.appendChild(el);
     });
+    container.appendChild(buildInsertControl(order.length));
+  }
+
+  // buildInsertControl renders a slim "+ Insert step" control that
+  // creates a new, empty content step (decision #29) right at this
+  // point in the story — between two already-captured steps, not just
+  // appended to the end, which is the whole reason this needs its own
+  // endpoint rather than reusing the capture-time AddStep path (see
+  // InsertContentStep's own doc comment). position is this control's
+  // index into fullOrder(), i.e. exactly where the new step should land.
+  function buildInsertControl(position) {
+    var wrap = document.createElement('div');
+    wrap.className = 'insert-step-row';
+    var btn = document.createElement('button');
+    btn.className = 'insert-step-btn';
+    btn.textContent = '+ Insert step';
+    btn.addEventListener('click', function() {
+      apiJSON('POST', '/api/insert-step', {position: position}).then(function(resp) {
+        sessionData = resp.session;
+        render();
+        var card = document.querySelector('[data-step-index="' + resp.new_index + '"]');
+        var ta = card && card.querySelector('textarea');
+        if (ta) {
+          ta.focus();
+          ta.scrollIntoView({block: 'center'});
+        }
+      }).catch(function(e) { alert('Insert failed: ' + e.message); });
+    });
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  // buildInsertImageControl renders the "Insert Image" button (plus its
+  // hidden file input) shared by every note/content textarea — uploads
+  // via /api/upload-image, then inserts a Markdown image reference at
+  // the textarea's current cursor position, exactly the way a GitHub
+  // issue's comment box handles a pasted image. The upload and the note
+  // save are two separate, deliberately un-linked steps (matching the
+  // existing "Save caption" button's own explicit-save pattern) — the
+  // image lands on disk immediately, but doesn't become part of the
+  // step's actual Note text until the user clicks Save.
+  function buildInsertImageControl(ta) {
+    var wrap = document.createElement('span');
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Insert Image';
+    var fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/png,image/jpeg';
+    fileInput.style.display = 'none';
+    btn.addEventListener('click', function() { fileInput.click(); });
+    fileInput.addEventListener('change', function() {
+      var file = fileInput.files[0];
+      fileInput.value = '';
+      if (!file) return;
+      btn.disabled = true;
+      var reader = new FileReader();
+      reader.onload = function() {
+        var dataUrl = String(reader.result);
+        var base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+        apiJSON('POST', '/api/upload-image', {data: base64}).then(function(res) {
+          var snippet = '![](' + res.filename + ')';
+          var start = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+          var end = ta.selectionEnd != null ? ta.selectionEnd : start;
+          var needsLeadingBreak = start > 0 && ta.value[start - 1] !== '\n';
+          var insert = (needsLeadingBreak ? '\n\n' : '') + snippet + '\n\n';
+          ta.value = ta.value.slice(0, start) + insert + ta.value.slice(end);
+          ta.focus();
+          var caret = start + insert.length;
+          ta.setSelectionRange(caret, caret);
+        }).catch(function(e) { alert('Image upload failed: ' + e.message); })
+          .then(function() { btn.disabled = false; });
+      };
+      reader.readAsDataURL(file);
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(fileInput);
+    return wrap;
   }
 
   function mkBtn(label, disabled, onclick) {

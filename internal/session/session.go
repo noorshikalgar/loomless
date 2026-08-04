@@ -71,6 +71,18 @@ type Step struct {
 	// nothing about cropping needs the destroy-the-pixels guarantee
 	// redaction exists for.
 	Crop *CropRect `json:"crop,omitempty"`
+
+	// IsContent marks a step authored directly in the editor (decision
+	// #29) rather than captured from a window/click or terminal command —
+	// a freeform Markdown block, inserted between captured steps to add
+	// context a screenshot can't (an explanation, a diagram, a linked
+	// video). It has no Command, ImageFile, or meaningful window info, so
+	// this exists purely to tell the editor UI not to show the "+ add
+	// app" window-info affordance a real capture-time note step still
+	// legitimately wants — every exporter already treats an empty
+	// WindowApp/Command the same way regardless of this flag, so IsContent
+	// changes nothing about how a step exports, only how it's edited.
+	IsContent bool `json:"is_content,omitempty"`
 }
 
 // CropRect is a rectangular region in an image's own pixel coordinates —
@@ -663,6 +675,58 @@ func ReorderSteps(name string, newOrder []int) (*Session, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// InsertContentStep reloads the named session and creates a new, empty
+// IsContent step (decision #29) at the given position in the display
+// order — 0 inserts before every other step, len(order) inserts after
+// the last one, and anything in between is clamped rather than
+// rejected, since the position comes from the editor's own current
+// rendering of the list and can't meaningfully be "invalid" the way an
+// out-of-range step index would be. Unlike AddStep (used by live
+// capture, which only ever appends), this is the one place a step can
+// land anywhere in the story, which is exactly the point: a content
+// step exists to add context between two ALREADY-captured steps, not
+// just at the end. Returns the new step's index alongside the updated
+// session so the caller (the editor's /api/insert-step handler) can
+// tell the frontend which card to focus.
+func InsertContentStep(name string, position int) (*Session, int, error) {
+	s, dir, err := Load(name)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	order := s.DisplayOrder
+	if len(order) == 0 {
+		order = make([]int, len(s.Steps))
+		for i, step := range s.Steps {
+			order[i] = step.Index
+		}
+	}
+	if position < 0 {
+		position = 0
+	}
+	if position > len(order) {
+		position = len(order)
+	}
+
+	step := Step{Index: len(s.Steps) + 1, Timestamp: time.Now(), IsContent: true}
+	s.Steps = append(s.Steps, step)
+
+	newOrder := make([]int, 0, len(order)+1)
+	newOrder = append(newOrder, order[:position]...)
+	newOrder = append(newOrder, step.Index)
+	newOrder = append(newOrder, order[position:]...)
+	s.DisplayOrder = newOrder
+
+	s.EditLog = append(s.EditLog, EditEntry{
+		Timestamp: time.Now(), Action: "insert_content_step", StepIndex: step.Index,
+		NewValue: fmt.Sprintf("position %d", position),
+	})
+	if err := save(dir, s); err != nil {
+		return nil, 0, err
+	}
+	return s, step.Index, nil
 }
 
 // SetStepHidden reloads the named session, marks a step hidden or
