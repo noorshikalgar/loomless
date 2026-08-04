@@ -54,11 +54,14 @@ func clamp(v, min, max float64) float64 {
 // click-capture daemon for it. highlightClicks controls whether captured
 // click screenshots get the red-ring annotation — off by default
 // (decision #21; was on by default per decision #15, but turned out not
-// to be useful in practice), opt-in per recording. A failure to start
-// click-watching (e.g. no Accessibility permission) is not a fatal error
-// — it's returned as warning text so the caller can surface it, while the
-// session itself is still usable via manual capture.
-func StartRecording(name string, highlightClicks bool) (dir string, watching bool, warning string, err error) {
+// to be useful in practice), opt-in per recording. autoCaption controls
+// whether each click-captured step gets an automatically-generated
+// caption (decision #33) — also off by default, same reasoning: a new
+// per-click behavior earns opt-in first, not default-on. A failure to
+// start click-watching (e.g. no Accessibility permission) is not a fatal
+// error — it's returned as warning text so the caller can surface it,
+// while the session itself is still usable via manual capture.
+func StartRecording(name string, highlightClicks, autoCaption bool) (dir string, watching bool, warning string, err error) {
 	_, dir, err = session.Create(name)
 	if err != nil {
 		return "", false, "", err
@@ -69,7 +72,7 @@ func StartRecording(name string, highlightClicks bool) (dir string, watching boo
 	// starting a recording.
 	startIdleWatchdog(name, dir)
 
-	if werr := startClickDaemon(name, dir, highlightClicks); werr != nil {
+	if werr := startClickDaemon(name, dir, highlightClicks, autoCaption); werr != nil {
 		return dir, false, werr.Error(), nil
 	}
 	return dir, true, "", nil
@@ -262,10 +265,13 @@ func ExportSlides(name string) (path string, err error) {
 // startClickDaemon relaunches the current executable in the background to
 // run the global click listener, since holding a CFRunLoop open means that
 // process can't also be the short-lived command that started the session.
-func startClickDaemon(name, dir string, highlightClicks bool) error {
+func startClickDaemon(name, dir string, highlightClicks, autoCaption bool) error {
 	var extraArgs []string
 	if highlightClicks {
 		extraArgs = append(extraArgs, "--highlight")
+	}
+	if autoCaption {
+		extraArgs = append(extraArgs, "--auto-caption")
 	}
 	if err := startBackgroundProcess("__click-daemon", name, session.DaemonPIDPath(dir), session.DaemonLogPath(dir), extraArgs...); err != nil {
 		return err
@@ -388,8 +394,9 @@ func findFailureLine(path string) (line string, found bool) {
 // click listener and, on every debounced click, captures the frontmost
 // window as a step. Runs until SIGTERM (sent by stopClickDaemon). Logging
 // goes through the provided logf so the CLI can direct it to the daemon's
-// log file as before.
-func RunClickDaemon(name string, highlightClicks bool, logf func(format string, args ...any)) error {
+// log file as before. autoCaption controls whether captured steps get an
+// automatically-generated caption (decision #33) — see buildAutoCaption.
+func RunClickDaemon(name string, highlightClicks, autoCaption bool, logf func(format string, args ...any)) error {
 	// CFRunLoopRun must run on the thread that installed the tap.
 	runtime.LockOSThread()
 
@@ -425,6 +432,7 @@ func RunClickDaemon(name string, highlightClicks bool, logf func(format string, 
 		var image []byte
 		wantAnnotation := false
 		var annX, annY, annW, annH float64
+		caption := ""
 
 		if err == nil {
 			windowApp, windowTitle = win.App, win.Title
@@ -462,8 +470,17 @@ func RunClickDaemon(name string, highlightClicks bool, logf func(format string, 
 					}
 				}
 			}
+
+			// AX element grounding is only queried when actually wanted —
+			// it needs its own accessibility grant beyond the click tap's
+			// own (see axelement_darwin.go), so a user who never asked for
+			// auto-captions never sees that extra permission prompt.
+			if autoCaption {
+				elem, elemOK := capture.AXElementAt(x, y)
+				caption = buildAutoCaption(elem, elemOK, windowApp, focusJustChanged)
+			}
 		}
-		step, err := session.AppendStep(name, "", windowApp, windowTitle, image)
+		step, err := session.AppendStep(name, caption, windowApp, windowTitle, image)
 		if err != nil {
 			logf("append step failed: %v", err)
 			return
@@ -476,6 +493,13 @@ func RunClickDaemon(name string, highlightClicks bool, logf func(format string, 
 		}
 		if len(step.Masked) > 0 {
 			logf("masked possible secret(s) in step %d (%s)", step.Index, strings.Join(step.Masked, ", "))
+		}
+		// step.Note, not the local caption variable — AppendStep already
+		// ran it through the same secret-masking pass every other
+		// user-facing field gets, and only the MASKED text should ever
+		// leave this process for a third-party API call.
+		if autoCaption && step.Note != "" {
+			polishCaptionAsync(name, step.Index, step.Note, logf)
 		}
 	}
 

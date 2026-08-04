@@ -12,9 +12,10 @@ Claude Code) narrating its own work through an MCP interface.
 ## Status
 
 **Phase 1.5 (agent path) done. Human path on macOS: click-capture
-(with a configurable highlight ring), terminal capture, secret-masking,
-idle-timeout nudge, a local editor (reorder/hide/caption/redact/highlight),
-and Markdown/PDF/slides export all work. Linux: window/terminal capture
+(with a configurable highlight ring and optional auto-generated
+captions), terminal capture, secret-masking, idle-timeout nudge, a
+local editor (reorder/hide/caption/redact/highlight), and
+Markdown/PDF/slides export all work. Linux: window/terminal capture
 works (X11 only), automatic click-capture doesn't yet.** The agent path
 (MCP server) works end to end on macOS. See
 [`docs/product/00-README.md`](docs/product/00-README.md) for the full
@@ -30,7 +31,9 @@ auto-stop**; PDF/slides: **rendered directly from session data, pure Go,
 no headless-browser/CDN dependency**; local editor: **web UI, not
 TUI**; highlights: **numbered, editable annotations shared by the
 automatic click-ring and manual highlights, not baked into pixels —
-see decisions #14/#16/#18**). Not done: auto-captions, Windows,
+see decisions #14/#16/#18**; auto-captions: **local template by
+default, macOS Accessibility API grounding, optional LLM rewrite only
+if `ANTHROPIC_API_KEY` is set — see decision #33**). Not done: Windows,
 Wayland, sharing — all later phases.
 
 ## Why
@@ -74,7 +77,7 @@ instead.
 
 ```bash
 go build -o story ./cmd/story
-./story record start my-first-story           # add --highlight to draw a ring on click-captured screenshots
+./story record start my-first-story           # add --highlight for a click ring, --auto-caption for generated captions
 # macOS: click around normally — each click is captured automatically
 ./story step "optional note, no click needed"
 ./story run -- go test ./...     # captures the command + its output as a step

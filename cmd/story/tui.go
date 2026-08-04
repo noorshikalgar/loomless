@@ -272,7 +272,7 @@ func (m *tuiModel) submitInput() {
 
 	switch purpose {
 	case inputNewSession:
-		_, watching, warning, err := startRecording(name, false)
+		_, watching, warning, err := startRecording(name, false, false)
 		if err != nil {
 			m.setStatus(err.Error(), true)
 			return

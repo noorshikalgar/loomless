@@ -209,7 +209,7 @@ func TestTUIModelStopEditorWithNothingRunningSetsErrorStatus(t *testing.T) {
 func TestTUIModelNewSessionFlow(t *testing.T) {
 	withTestHome(t)
 	orig := startRecording
-	startRecording = func(name string, highlightClicks bool) (string, bool, string, error) {
+	startRecording = func(name string, highlightClicks, autoCaption bool) (string, bool, string, error) {
 		_, dir, err := session.Create(name)
 		return dir, true, "", err
 	}
@@ -255,7 +255,7 @@ func TestTUIModelNewSessionFlow(t *testing.T) {
 func TestTUIModelNewSessionWatchingFalseShowsWarning(t *testing.T) {
 	withTestHome(t)
 	orig := startRecording
-	startRecording = func(name string, highlightClicks bool) (string, bool, string, error) {
+	startRecording = func(name string, highlightClicks, autoCaption bool) (string, bool, string, error) {
 		_, dir, err := session.Create(name)
 		return dir, false, "no Accessibility permission", err
 	}

@@ -2247,6 +2247,128 @@ the self-contained, server-less *exported* Slides file.
    the kind of false alarm that's easy to misdiagnose as a real
    regression in the coordinate-scaling logic.
 
+## 33. Auto-captions for click recordings — local grounding, optional LLM polish
+
+Decided 2026-08-04, the last unbuilt item from the original Phase 2
+roadmap: a pure-click (non-agent) recording captured a sequence of
+screenshots with every caption left empty, since nothing narrated what
+each click was actually doing. `docs/product/03-features.md` had
+already scoped the intended shape years earlier — "using the clicked
+element's label/DOM text as grounding context, not raw pixel guessing"
+— which meant this genuinely needed two separate pieces of new
+capability, each with its own real tradeoff, not one self-contained
+feature: (1) knowing *what* was clicked, beyond raw (x, y), and (2)
+turning that into a natural sentence. Both were scoped explicitly with
+the user before writing any code, rather than assuming the literal
+"via an LLM call" wording from the old feature doc still reflected what
+was wanted three phases later.
+
+**Element grounding: real macOS Accessibility API, not a text
+heuristic.** `capture.AXElementAt(x, y)` queries
+`AXUIElementCopyElementAtPosition` for the actual UI control under a
+click and pulls its `kAXRoleDescriptionAttribute` (the same human-
+readable role VoiceOver itself uses — "button," "text field," not the
+raw `AXButton` constant) plus the first non-empty of
+`kAXTitleAttribute`/`kAXDescriptionAttribute`/`kAXValueAttribute` as a
+label — different control types populate different attributes for
+what a human would call their "label," so trying all three in priority
+order is load-bearing, not defensive padding. New cgo (matching
+`clickhook_darwin.go`'s existing precedent — this file isn't the first
+cgo in this package), gated behind `//go:build darwin` with `_linux.go`
+and `_other.go` stubs returning `ok=false`, the same three-file
+per-platform pattern `clickhook_*.go`/`window_*.go` already established.
+Requires its own Accessibility grant, separate from the click tap's
+own — deliberately only queried when `--auto-caption` is actually
+passed, so a user who never asked for this never sees the extra
+permission prompt.
+
+**Local template caption by default; LLM rewrite is opt-in and
+asynchronous, never on the capture hot path.** `buildAutoCaption`
+composes a caption purely from already-available data (no network, no
+API key, no per-click cost) — "Clicked the "Export" button in
+Finder.", degrading gracefully through "Clicked a button in Finder."
+(no label), "Clicked in Finder." (grounding unavailable), down to ""
+(nothing at all available) — never fabricating specificity the query
+didn't actually provide. This alone satisfies the roadmap's original
+intent for most uses and is what ships when `ANTHROPIC_API_KEY` isn't
+set, which is the DEFAULT for every user who hasn't configured one —
+consistent with every other decision this project has made toward
+staying local-first (no CDN, no headless-browser export dependency,
+self-contained Slides files). If a key IS configured,
+`polishCaptionAsync` fires a **non-blocking goroutine**, after the step
+is already saved with its complete local caption, that asks a small
+model (`claude-haiku-4-5`, `max_tokens: 60` — a bounded one-sentence
+rewrite, not an open-ended generation task) to phrase it more
+naturally, then updates the step via the existing `session.EditNote`
+if and when it succeeds. A slow network, a missing key, or an API
+error just means the local caption stands — capture responsiveness
+never depends on this succeeding, and neither does correctness.
+
+**Only the already-masked caption ever leaves the process.**
+`session.AppendStep` already runs every text field (note included)
+through the same secret-masking pass every other capture path uses —
+this matters more here than it ever has before, since an AX-queried
+element label is real, unfiltered UI text (could be a filename, an
+email address, anything visible on screen) flowing into a caption for
+the first time. `polishCaptionAsync` is deliberately called with
+`step.Note` (the value AppendStep already masked and persisted), never
+the local `caption` variable computed before that pass — sending the
+pre-masking text to a third-party API would silently defeat the
+masking guarantee for exactly the case (an LLM call) where it matters
+most.
+
+**Verified:**
+
+1. Unit tests: `internal/engine` (`buildAutoCaption` table-tested
+   across every degradation tier — labeled element with/without an
+   app, role-only, grounding entirely unavailable, and the
+   focus-just-changed override, which takes priority over all of
+   them, matching the existing annotation-suppression reasoning
+   `RunClickDaemon` already had for the same "a focus-switch click
+   isn't a deliberate target" case; `rephraseCaption` against a local
+   `httptest.Server` confirming the request carries the right
+   `x-api-key`/`anthropic-version` headers and the caption embedded
+   in the prompt, correctly parses a real response shape, and
+   surfaces a non-200 status as an error rather than silently
+   returning garbage; `polishCaptionAsync` confirmed to be a
+   genuine no-op — no goroutine, no session mutation — when
+   `ANTHROPIC_API_KEY` is unset, and confirmed end-to-end (polling
+   with a timeout, since it's genuinely async) to update the step's
+   persisted note when a key is configured against a mocked
+   endpoint).
+2. `go build/vet/gofmt` clean on macOS; cross-compiled clean for
+   Linux (the `axelement_linux.go` stub, matching `clickhook_linux.go`'s
+   already-accepted gap: no click-capture on Linux yet means no click
+   to ground an element query against there either).
+3. A real, non-mocked end-to-end plumbing check: built the actual CLI
+   binary and ran `story record start <name> --auto-caption` against
+   the live daemon-relaunch path (flag parsing → `StartRecording` →
+   `startClickDaemon`'s subprocess relaunch with `--auto-caption` →
+   `RunClickDaemon`), confirming the daemon starts cleanly, logs
+   "auto-captions enabled," and stops cleanly — the full plumbing
+   this decision's code touches, exercised for real, not simulated.
+4. **One thing this could NOT be verified live, worth recording
+   honestly rather than glossing over**: `AXElementAt`'s actual
+   *success* path — finding a real element with a real role/label
+   from a real click. Confirmed `AXIsProcessTrusted()` correctly
+   reports the built binary's permission state, and confirmed
+   `AXElementAt` cleanly returns `ok=false` (no crash, no hang) across
+   repeated calls at several coordinates when nothing is found —
+   real evidence the cgo memory bridging (the malloc'd C strings,
+   `CFRelease` calls) doesn't have an immediately-crashing bug. But
+   every attempt to construct a live "found a real, named UI element"
+   test in this environment — launching Calculator, an AppleScript
+   `display dialog` — failed to produce a queryable window, traced to
+   the automation shell here not attaching to the same interactive
+   desktop session actually in use (confirmed via `System Events`
+   reporting a completely different app as frontmost while a
+   Bash-launched Calculator process ran with zero open windows).
+   This is a genuine environment constraint, not a reasoning gap —
+   recommend a quick manual smoke test on a real interactive session
+   (`story record start test --auto-caption`, click a few labeled
+   buttons in a real app, check the resulting captions) before
+   relying on this in practice.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

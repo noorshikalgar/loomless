@@ -1,11 +1,10 @@
 // Command story is the CLI (and, via "story mcp", the MCP server) for
 // Story's core loop: start a recording (which watches clicks
 // automatically), capture manual and terminal steps, stop, and export to
-// Markdown. Business logic lives in internal/engine, shared with the MCP
-// server — this file is presentation only (usage text, printing,
-// exit-code plumbing). See docs/product/09-roadmap.md for what's
-// deliberately not here yet (auto-captions, PDF/slide export,
-// cross-platform support beyond macOS).
+// Markdown/PDF/slides. Business logic lives in internal/engine, shared
+// with the MCP server — this file is presentation only (usage text,
+// printing, exit-code plumbing). See docs/product/09-roadmap.md for
+// what's deliberately not here yet.
 package main
 
 import (
@@ -76,7 +75,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `story — turn a working session into a readable story
 
 Usage:
-  story record start <name> [--no-highlight]   Begin a session (auto-captures clicks)
+  story record start <name> [--highlight] [--auto-caption]   Begin a session (auto-captures clicks)
   story record stop             Finish the active session
   story step ["note"]           Manually capture the frontmost window as a step
   story run [--] <cmd> [args]   Run a command, capture it + its output as a step
@@ -105,25 +104,30 @@ func cmdRecord(args []string) error {
 
 func recordStart(args []string) error {
 	name := ""
-	// Off by default (decision #21: the automatic red-ring annotation
-	// on every click-captured screenshot turned out not to be useful in
-	// practice) — pass --highlight to opt back in.
+	// Both off by default: decision #21 for the highlight ring, decision
+	// #33 for auto-captions — a new per-click behavior earns opt-in
+	// first, not default-on.
 	highlightClicks := false
+	autoCaption := false
 	for _, a := range args {
 		if a == "--highlight" {
 			highlightClicks = true
 			continue
 		}
+		if a == "--auto-caption" {
+			autoCaption = true
+			continue
+		}
 		if name != "" {
-			return fmt.Errorf("usage: story record start <name> [--highlight]")
+			return fmt.Errorf("usage: story record start <name> [--highlight] [--auto-caption]")
 		}
 		name = a
 	}
 	if name == "" {
-		return fmt.Errorf("usage: story record start <name> [--highlight]")
+		return fmt.Errorf("usage: story record start <name> [--highlight] [--auto-caption]")
 	}
 
-	dir, watching, warning, err := engine.StartRecording(name, highlightClicks)
+	dir, watching, warning, err := engine.StartRecording(name, highlightClicks, autoCaption)
 	if err != nil {
 		return err
 	}
@@ -133,8 +137,15 @@ func recordStart(args []string) error {
 		fmt.Fprintln(os.Stderr, "story: you can still use 'story step \"note\"' to capture manually")
 		return nil
 	}
+	var extras []string
 	if highlightClicks {
-		fmt.Println("Watching clicks (highlight ring enabled) — use 'story step \"note\"' to add notes without a click.")
+		extras = append(extras, "highlight ring enabled")
+	}
+	if autoCaption {
+		extras = append(extras, "auto-captions enabled")
+	}
+	if len(extras) > 0 {
+		fmt.Printf("Watching clicks (%s) — use 'story step \"note\"' to add notes without a click.\n", strings.Join(extras, ", "))
 	} else {
 		fmt.Println("Watching clicks — use 'story step \"note\"' to add notes without a click.")
 	}
@@ -154,15 +165,19 @@ func recordStop() error {
 // see engine.RunClickDaemon.
 func runClickDaemon(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story __click-daemon <session-name> [--highlight]")
+		return fmt.Errorf("usage: story __click-daemon <session-name> [--highlight] [--auto-caption]")
 	}
 	highlightClicks := false
+	autoCaption := false
 	for _, a := range args[1:] {
 		if a == "--highlight" {
 			highlightClicks = true
 		}
+		if a == "--auto-caption" {
+			autoCaption = true
+		}
 	}
-	return engine.RunClickDaemon(args[0], highlightClicks, func(format string, a ...any) {
+	return engine.RunClickDaemon(args[0], highlightClicks, autoCaption, func(format string, a ...any) {
 		fmt.Printf(format+"\n", a...)
 	})
 }
