@@ -6,6 +6,7 @@ func indexHTML(name string) string {
 	return `<!doctype html>
 <html><head><meta charset="utf-8">
 <title>Edit — ` + html.EscapeString(name) + `</title>
+<link rel="icon" type="image/svg+xml" href="` + faviconDataURI + `">
 <style>` + editorCSS + `</style>
 </head><body>
 <h1>` + html.EscapeString(name) + `</h1>

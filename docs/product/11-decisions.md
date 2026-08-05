@@ -2662,6 +2662,62 @@ permissions are optional" in the new docs is backed by reading the
 actual current code, not asserted from memory of what the feature was
 supposed to do.
 
+## 38. Product icon (`assets/icon.svg`)
+
+Decided 2026-08-05, designed interactively with the user over several
+iterations. First attempts (a thread/loom motif, then a camera-viewfinder
+bracket mark) were both rejected as either fighting the product name
+("loom-LESS" means no loom needed, so thread/weave imagery was exactly
+backwards) or too generic ("brackets are very common — think out of the
+box"). The design that stuck came from the user's own concrete spec
+rather than from picking among AI-proposed abstract concepts: a
+staircase grid of dashed, rounded squares — 1 block, then 2, then 3,
+left-aligned — with specific cells replaced by shapes representing the
+app's actual annotation tools (a hand-drawn/freehand square, a circle,
+and a square whose bottom edge breaks open into an arrow), numbered
+badges on the colored shapes, and colors pulled directly from the app's
+own CSS rather than invented: `#FFB020` (amber, `.drag-overlay.rect`/
+`.circle`'s live-drag color) with the same ~16% alpha fill the app uses
+while a shape is actively being dragged, `#A855F7` (violet, chosen to
+avoid reusing amber twice), and `#FF3B30` (`DEFAULT_ANNOTATION_COLOR`,
+the same red committed annotations render in). Plain (non-annotated)
+step squares stay neutral gray (`#C9C9C9`). Badge backgrounds match
+each shape's own color and are numbered 1/2/3, top-right — mirroring how
+`badge.style.background = color()` already works in the real editor
+(`internal/editor/html.go`), just repositioned per the user's explicit
+ask (in-app badges sit top-left).
+
+**Verification loop that got here:** every iteration was rendered to an
+actual PNG (via `qlmanage -t`, since the browser tool's static-file
+preview for paths outside the project directory turned out to be
+unreliable mid-session) and inspected with the Read tool before being
+shown to the user — nothing was described without being looked at
+first, including at a realistic small size (~96px) to confirm the
+dashed strokes and colors still read before committing to a direction.
+
+**Shipped:**
+- `assets/icon.svg` — the master, at a 512×512 viewBox, with an
+  accessible `<title>`.
+- `assets/icon-{16,32,180,192,512}.png` — rasterized via `sips` from
+  the 512px master, covering common favicon/apple-touch-icon/social
+  sizes.
+- `internal/editor/favicon.go` — the same SVG, comments and whitespace
+  stripped, inlined as a base64 `data:` URI (`faviconDataURI`) and
+  wired into the editor's `<head>` (`internal/editor/html.go`) via
+  `<link rel="icon">`. A data URI, not a served static file, because
+  this is a single-binary tool with no static-asset directory to serve
+  from — same reasoning as inlining CSS/JS directly into `html.go`
+  already established.
+- `README.md` now shows the icon at the top.
+
+**Verified:** `go build/vet/gofmt/test` clean. Live-verified in a real
+browser: built the binary, started a real session, ran `loomless edit`
+against it, navigated to the running editor, and confirmed via
+`document.querySelector('link[rel="icon"]')` that the favicon tag is
+present with a valid, correctly-prefixed `data:image/svg+xml;base64,`
+href — not just that the Go code compiled, that the actual served page
+carries it.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

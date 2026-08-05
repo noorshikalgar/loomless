@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" width="96" height="96" alt="Loomless">
+
 # Loomless
 
 > Turn a working session into a readable story — not a video.
