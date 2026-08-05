@@ -2444,6 +2444,104 @@ requiring real keys for CI.
    to `session.EditNote` still works after the refactor.
 2. `go build/vet/gofmt` clean; cross-compiled clean for Linux.
 
+## 35. TUI redesign: solid nvim-style status bar, live search, two-column detail view
+
+Decided 2026-08-05. The TUI (`story tui`, decisions #23/#24) was a flat,
+single-column session list with a plain-foreground status line and no
+way to see anything about a session besides its name, step count, and
+start time — reasonable for a first pass, but thin once someone
+actually has more than a handful of sessions on disk (the developer
+persona this whole project targets: someone who's recorded a dozen
+half-finished debugging sessions and needs to tell them apart fast,
+without opening each one in the browser editor just to check "did I
+already export this one?").
+
+**Dev/QA persona framing:** the person reaching for `story tui` instead
+of `story export <name>` directly is specifically someone who *doesn't
+remember the exact session name* or wants to browse — so the two things
+worth optimizing for are (a) narrowing the list fast (search) and (b)
+answering "what is this session, exactly" without leaving the list
+(the detail panel: location, timing, step/screenshot counts, and
+crucially per-format export status, so "have I already exported this"
+is a glance instead of a `ls` in another terminal).
+
+**Design decisions:**
+
+- **A dedicated, always-visible search bar (`/` to focus), not
+  bubbles/list's built-in filter overlay.** The built-in filter also
+  binds `/` but renders as a transient overlay across the list itself;
+  the user's ask was for a search box positioned *above* the list,
+  visible at all times, which is a different UI, not a styling tweak —
+  so `list.SetFilteringEnabled(false)` and a hand-rolled
+  `textinput.Model` + `applyFilter()` (case-insensitive substring match
+  against session names) replace it. `Esc` clears the query from
+  anywhere in normal mode, not just while the search box itself is
+  focused, since re-pressing `/` just to then press `Esc` to clear a
+  filter that's visibly still active would be an odd extra hop.
+- **Two-column layout via `lipgloss.JoinHorizontal`, with a real
+  minimum-width fallback to single-column.** A fixed split would either
+  waste space on a wide terminal or produce an unreadably thin detail
+  panel on a narrow one; the left column is capped (not left to grow
+  unbounded — it's a list of short names, not prose) and the whole
+  two-column layout collapses back to the plain single-column list
+  below a terminal-width threshold rather than rendering a panel too
+  narrow to read anything in.
+- **The detail panel is read-only context, not another editing
+  surface.** Rename and the web editor already own "change this
+  session"; the panel exists purely to answer "what is this session" —
+  location (`session.Dir`), started/stopped timestamps, step count
+  broken out by how many carry a screenshot, and export status per
+  format checked directly against the filesystem (`os.Stat` on
+  `<dir>/<name>.{md,pdf,html}`), not inferred from any in-memory flag,
+  since the actual exported file on disk is the only thing that can't
+  lie about whether an export happened.
+- **An actual nvim-style status bar — solid `.Background()` fills, not
+  just colored foreground text on the terminal default.** The previous
+  status line was one `Foreground()`-only style; a real statusline look
+  needs background-filled segments (a MODE block that recolors between
+  NORMAL/SEARCH, a counts block, a background-filled spacer stretching
+  to the right edge, and a right-aligned status/error segment) — this
+  is what was explicitly asked for ("solid color proper structured"),
+  and it's also just more scannable at a glance than a wall of
+  same-colored text.
+- **`allSessions` as the disk-backed source of truth, separate from
+  what `list.Model` is currently displaying.** `refresh()` now updates
+  `allSessions` and re-applies whatever search query is active, rather
+  than calling `list.SetItems` directly — otherwise a background
+  refresh (or the auto-refresh after create/rename/stop) would silently
+  drop an in-progress search filter.
+- **No changes to any existing method signature or behavior** —
+  `export`, `openEditor`, `stopEditor`, `startInput`, `submitInput`,
+  `stopRecording`, `refresh`, and the `status`/`statusIsError`/`list`/
+  `editors`/`textInput`/`inputPurpose`/`renameTarget` fields are
+  untouched, since `tui_test.go`'s existing 13 tests call these
+  directly rather than driving the UI through simulated keypresses —
+  the redesign is additive (new fields, new render methods, new key
+  handling for search focus) specifically so none of that coverage
+  needed to change.
+
+**Verified:**
+
+1. `go build/vet/gofmt` clean; all 13 pre-existing `tui_test.go` tests
+   pass unmodified (confirming the redesign didn't change any tested
+   method's behavior); full `go test ./...` clean.
+2. Live verification in a real pty (`tmux`, since the TUI needs an
+   actual terminal, not a piped one): built the binary, created three
+   real sessions plus reused several pre-existing ones with real
+   exported files on disk, then drove the running TUI via
+   `tmux send-keys`/`capture-pane` — confirmed the two-column layout
+   renders with real session data, `/` switches the status bar's mode
+   block from NORMAL to SEARCH, typing a query live-filters the list
+   and updates the counts segment (`7/7` → `1/7`) and the detail panel
+   in the same keystroke, the detail panel's export checkmarks matched
+   the real files present on disk (`test4` showed Markdown ✓/PDF ✓/
+   Slides — matching what was actually exported earlier in this
+   session), arrow-key navigation updates the detail panel to track
+   the new selection, `Esc` clears an active filter and reverts the
+   mode block to NORMAL, and resizing the pty down to 35 columns
+   correctly collapsed to the single-column fallback without a crash
+   or layout corruption.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

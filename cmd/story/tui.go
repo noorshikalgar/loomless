@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -30,7 +32,7 @@ var startRecording = engine.StartRecording
 // browser-based editor over a TUI specifically for the visual editing
 // work (redaction, annotations — things that need a canvas); that
 // reasoning doesn't apply to session *management*, which is exactly what
-// a fast, keyboard-driven list is good at. See decisions #23/#24.
+// a fast, keyboard-driven list is good at. See decisions #23/#24/#35.
 func cmdTUI(args []string) error {
 	m, err := newTUIModel()
 	if err != nil {
@@ -81,6 +83,11 @@ const (
 )
 
 type tuiModel struct {
+	// allSessions is the unfiltered source of truth, refreshed from disk
+	// by refresh() — m.list.Items() is always a view derived from this
+	// (via applyFilter), never mutated directly, so a search query and a
+	// disk refresh can never disagree about what the full session set is.
+	allSessions   []session.Session
 	list          list.Model
 	editors       map[string]*runningEditor
 	status        string
@@ -90,6 +97,18 @@ type tuiModel struct {
 	textInput    textinput.Model
 	inputPurpose inputPurpose
 	renameTarget string // session being renamed, captured when the prompt opens (the list's selection can't be trusted to still point at it once the name changes)
+
+	// searchInput drives a persistent search bar above the list
+	// (decision #35) — deliberately NOT bubbles/list's own built-in
+	// filter (which lives inside the list widget and claims '/' itself),
+	// since the layout this replaces asked for a distinct, always-visible
+	// search bar rather than an overlay. searchFocused gates whether
+	// keystrokes go to the search box (live-filtering as you type) or to
+	// the normal single-key shortcuts — without that gate, typing "n" to
+	// search for a session named "nginx-fix" would instead trigger "new
+	// session" on the very first keystroke.
+	searchInput   textinput.Model
+	searchFocused bool
 }
 
 func newTUIModel() (tuiModel, error) {
@@ -98,11 +117,30 @@ func newTUIModel() (tuiModel, error) {
 		return tuiModel{}, err
 	}
 	l := list.New(sessionItems(sessions), list.NewDefaultDelegate(), 0, 0)
-	l.Title = "Story sessions"
-	l.SetStatusBarItemName("session", "sessions")
+	l.Title = "Sessions"
+	// This TUI's own search bar and status/legend lines replace list's
+	// built-in equivalents — showing both would be redundant chrome
+	// competing for the same narrow left column.
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
+	l.SetFilteringEnabled(false)
+
 	ti := textinput.New()
 	ti.CharLimit = 64
-	return tuiModel{list: l, editors: make(map[string]*runningEditor), textInput: ti}, nil
+
+	search := textinput.New()
+	search.Placeholder = "Search sessions…"
+	search.Prompt = "/ "
+	search.CharLimit = 64
+
+	m := tuiModel{
+		allSessions: sessions,
+		list:        l,
+		editors:     make(map[string]*runningEditor),
+		textInput:   ti,
+		searchInput: search,
+	}
+	return m, nil
 }
 
 func sessionItems(sessions []session.Session) []list.Item {
@@ -113,16 +151,39 @@ func sessionItems(sessions []session.Session) []list.Item {
 	return items
 }
 
+// applyFilter rebuilds m.list's items from m.allSessions, restricted to
+// sessions whose name contains the current search query
+// (case-insensitive substring — this is a dashboard for a handful to a
+// few dozen local sessions, not a corpus that needs fuzzy ranking). An
+// empty query is the common case and just shows everything.
+func (m *tuiModel) applyFilter() {
+	query := strings.ToLower(strings.TrimSpace(m.searchInput.Value()))
+	if query == "" {
+		m.list.SetItems(sessionItems(m.allSessions))
+		return
+	}
+	filtered := make([]session.Session, 0, len(m.allSessions))
+	for _, s := range m.allSessions {
+		if strings.Contains(strings.ToLower(s.Name), query) {
+			filtered = append(filtered, s)
+		}
+	}
+	m.list.SetItems(sessionItems(filtered))
+}
+
 func (m tuiModel) Init() tea.Cmd { return nil }
+
+// reservedRows is how much vertical space the chrome around the list
+// takes: one line for the search bar, one for the nvim-style status
+// bar, one for the shortcut legend beneath it.
+const reservedRows = 3
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		// Reserve two lines for the footer below the list: a status/
-		// prompt line and a shortcut-legend line, always both present so
-		// the list's height never has to shift between modes.
-		m.list.SetSize(msg.Width, msg.Height-2)
+		leftWidth, _ := m.columnWidths()
+		m.list.SetSize(leftWidth, msg.Height-reservedRows)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -140,13 +201,44 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		if m.list.FilterState() == list.Filtering {
-			break
+		if m.searchFocused {
+			switch msg.String() {
+			case "enter":
+				// Keep whatever's typed, hand keyboard focus back to the
+				// list — the filtered results stay filtered until the
+				// query is cleared (Esc, or editing it again via '/').
+				m.searchFocused = false
+				m.searchInput.Blur()
+				return m, nil
+			case "esc":
+				m.searchInput.SetValue("")
+				m.searchFocused = false
+				m.searchInput.Blur()
+				m.applyFilter()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			m.applyFilter()
+			return m, cmd
 		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.closeAllEditors()
 			return m, tea.Quit
+		case "/":
+			m.searchFocused = true
+			return m, m.searchInput.Focus()
+		case "esc":
+			// Clear an already-applied search filter even when the bar
+			// itself isn't focused right now — otherwise clearing it
+			// again needs '/' then Esc instead of just Esc.
+			if m.searchInput.Value() != "" {
+				m.searchInput.SetValue("")
+				m.applyFilter()
+			}
+			return m, nil
 		case "enter", "e":
 			m.openEditor()
 			return m, nil
@@ -180,17 +272,62 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// Palette for the nvim-style status bar: solid background blocks, not
+// just colored text on the terminal's default background — the mode
+// segment's color changes with the current interaction mode (normal vs.
+// search), the same way an editor statusline recolors its mode
+// indicator between Normal/Insert/Visual.
 var (
-	statusOKStyle    = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("242"))
-	statusErrStyle   = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("196"))
+	modeNormalStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1).
+			Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+	modeSearchStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1).
+			Background(lipgloss.Color("214")).Foreground(lipgloss.Color("235"))
+	statusInfoStyle = lipgloss.NewStyle().Padding(0, 1).
+			Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
+	statusErrStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1).
+			Background(lipgloss.Color("196")).Foreground(lipgloss.Color("230"))
+	statusFillStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+
 	legendStyle      = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("59"))
 	promptLabelStyle = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("228")).Bold(true)
+
+	searchBarStyle        = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("245"))
+	searchBarFocusedStyle = lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("230")).Bold(true)
+
+	detailBorderStyle = lipgloss.NewStyle().Padding(0, 2).BorderStyle(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("59")).BorderLeft(true).
+				BorderTop(false).BorderRight(false).BorderBottom(false)
+	detailTitleStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("228"))
+	detailLabelStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	detailMutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Italic(true)
+	detailRecordingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	exportYesStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
+	exportNoStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
 )
 
-const (
-	listLegend  = "enter/e edit · x stop editor · S stop rec · n new · c rename · m/p/s export · r refresh · q quit"
-	inputLegend = "enter confirm · esc cancel"
-)
+const listLegend = "/ search · enter/e edit · x stop editor · S stop rec · n new · c rename · m/p/s export · r refresh · q quit"
+
+// columnWidths splits the terminal into a left session-list column and
+// a right detail-panel column. The left column is capped rather than
+// left to grow with the terminal — a session list is a list of short
+// names, not prose, so a very wide left column mostly just wastes space
+// the detail panel could use instead; the right column always gets
+// whatever's left; a minimum on the right column stops the split from
+// producing an unusably narrow detail panel on a small terminal.
+func (m tuiModel) columnWidths() (left, right int) {
+	left = m.width * 2 / 5
+	if left > 42 {
+		left = 42
+	}
+	if left < 20 {
+		left = m.width
+	}
+	right = m.width - left
+	if right < 24 {
+		right = 0 // terminal too narrow for two columns at all
+	}
+	return left, right
+}
 
 func (m tuiModel) View() string {
 	if m.inputPurpose != inputNone {
@@ -202,21 +339,132 @@ func (m tuiModel) View() string {
 		return m.list.View() + "\n" + prompt + "\n" + legendStyle.Render(inputLegend)
 	}
 
-	status := m.status
-	style := statusOKStyle
-	if m.statusIsError {
-		style = statusErrStyle
+	searchBar := m.renderSearchBar()
+	body := m.renderBody()
+	statusBar := m.renderStatusBar()
+	legend := legendStyle.Render(listLegend)
+	return searchBar + "\n" + body + "\n" + statusBar + "\n" + legend
+}
+
+const inputLegend = "enter confirm · esc cancel"
+
+func (m tuiModel) renderSearchBar() string {
+	style := searchBarStyle
+	if m.searchFocused {
+		style = searchBarFocusedStyle
 	}
-	if status == "" {
-		running := 0
-		for _, i := range m.list.Items() {
-			if it, ok := i.(sessionItem); ok && it.s.StoppedAt == nil {
-				running++
-			}
+	return style.Width(m.width).Render(m.searchInput.View())
+}
+
+// renderBody lays out the session list and the detail panel side by
+// side — falling back to just the list, full width, on a terminal too
+// narrow for a usable two-column split (columnWidths' own right<24
+// signal), rather than rendering a detail panel too cramped to read.
+func (m tuiModel) renderBody() string {
+	leftWidth, rightWidth := m.columnWidths()
+	if rightWidth == 0 {
+		return m.list.View()
+	}
+	listView := lipgloss.NewStyle().Width(leftWidth).Render(m.list.View())
+	detail := detailBorderStyle.Width(rightWidth).Height(m.list.Height()).Render(m.renderDetail())
+	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detail)
+}
+
+// renderStatusBar builds the nvim-style line: a solid mode block, a
+// solid counts block, a filled-background middle, and (when there's
+// something to say) a right-aligned status/error block — replacing the
+// old plain single-color text line with actual background-filled
+// segments, the same visual language an editor statusline uses.
+func (m tuiModel) renderStatusBar() string {
+	mode, modeStyle := "NORMAL", modeNormalStyle
+	if m.searchFocused {
+		mode, modeStyle = "SEARCH", modeSearchStyle
+	}
+	modeSeg := modeStyle.Render(mode)
+
+	running := 0
+	for _, s := range m.allSessions {
+		if s.StoppedAt == nil {
+			running++
 		}
-		status = fmt.Sprintf("%d session(s) · %d editor(s) running · %d recording", len(m.list.Items()), len(m.editors), running)
 	}
-	return m.list.View() + "\n" + style.Render(status) + "\n" + legendStyle.Render(listLegend)
+	shown := len(m.list.Items())
+	countsText := fmt.Sprintf(" %d/%d sessions · %d editor(s) · %d recording ", shown, len(m.allSessions), len(m.editors), running)
+	countsSeg := statusInfoStyle.Render(countsText)
+
+	var rightSeg string
+	if m.status != "" {
+		style := statusInfoStyle
+		if m.statusIsError {
+			style = statusErrStyle
+		}
+		rightSeg = style.Render(" " + m.status + " ")
+	}
+
+	left := modeSeg + countsSeg
+	fillWidth := m.width - lipgloss.Width(left) - lipgloss.Width(rightSeg)
+	if fillWidth < 0 {
+		fillWidth = 0
+	}
+	fill := statusFillStyle.Render(strings.Repeat(" ", fillWidth))
+	return left + fill + rightSeg
+}
+
+// renderDetail describes the currently-highlighted session — everything
+// here is read-only context (location, size, export status), not
+// another place to edit anything; editing already has its own
+// dedicated controls (rename, the web editor).
+func (m tuiModel) renderDetail() string {
+	sel, ok := m.selected()
+	if !ok {
+		return detailMutedStyle.Render("No session selected.")
+	}
+
+	dir, dirErr := session.Dir(sel.Name)
+	imageCount := 0
+	for _, step := range sel.Steps {
+		if step.ImageFile != "" {
+			imageCount++
+		}
+	}
+
+	status := detailMutedStyle.Render("stopped")
+	if sel.StoppedAt == nil {
+		status = detailRecordingStyle.Render("● recording")
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n%s\n\n", detailTitleStyle.Render(sel.Name), status)
+	if dirErr == nil {
+		fmt.Fprintf(&b, "%s\n%s\n\n", detailLabelStyle.Render("Location"), dir)
+	}
+	fmt.Fprintf(&b, "%s\n%s\n\n", detailLabelStyle.Render("Started"), sel.StartedAt.Format("2006-01-02 15:04"))
+	if sel.StoppedAt != nil {
+		fmt.Fprintf(&b, "%s\n%s\n\n", detailLabelStyle.Render("Stopped"), sel.StoppedAt.Format("2006-01-02 15:04"))
+	}
+	fmt.Fprintf(&b, "%s\n%d step(s), %d with a screenshot\n\n", detailLabelStyle.Render("Steps"), len(sel.Steps), imageCount)
+
+	fmt.Fprintf(&b, "%s\n", detailLabelStyle.Render("Exported"))
+	fmt.Fprintf(&b, "  Markdown  %s\n", exportMark(dirErr == nil && fileExists(filepath.Join(dir, sel.Name+".md"))))
+	fmt.Fprintf(&b, "  PDF       %s\n", exportMark(dirErr == nil && fileExists(filepath.Join(dir, sel.Name+".pdf"))))
+	fmt.Fprintf(&b, "  Slides    %s\n", exportMark(dirErr == nil && fileExists(filepath.Join(dir, sel.Name+".html"))))
+
+	if ed, ok := m.editors[sel.Name]; ok {
+		fmt.Fprintf(&b, "\n%s\n%s\n", detailLabelStyle.Render("Editor running"), ed.url)
+	}
+	return b.String()
+}
+
+func exportMark(exported bool) string {
+	if exported {
+		return exportYesStyle.Render("✓ yes")
+	}
+	return exportNoStyle.Render("— no")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (m *tuiModel) selected() (session.Session, bool) {
@@ -406,17 +654,20 @@ func (m *tuiModel) export(format string) {
 	m.setStatus("Exported to "+path, false)
 }
 
-// refresh re-lists sessions from disk and clears any prior status
-// message — the default (empty-status) view already shows live session/
-// editor/recording counts, so a bare refresh needs no separate
-// confirmation text of its own. Callers that follow refresh() with their
-// own setStatus (export, rename, stop) simply overwrite this.
+// refresh re-lists sessions from disk, re-applies whatever search query
+// is currently active (a refresh shouldn't silently drop a filter the
+// user was mid-way through), and clears any prior status message — the
+// default (empty-status) view already shows live session/editor/
+// recording counts, so a bare refresh needs no separate confirmation
+// text of its own. Callers that follow refresh() with their own
+// setStatus (export, rename, stop) simply overwrite this.
 func (m *tuiModel) refresh() {
 	sessions, err := session.List()
 	if err != nil {
 		m.setStatus(err.Error(), true)
 		return
 	}
-	m.list.SetItems(sessionItems(sessions))
+	m.allSessions = sessions
+	m.applyFilter()
 	m.setStatus("", false)
 }
