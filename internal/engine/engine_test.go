@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // TestStopRecordingNamedDoesNotDisturbOtherCurrentSession is the reason

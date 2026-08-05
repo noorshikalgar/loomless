@@ -15,12 +15,12 @@
 
 ### Scenario A: Solo developer documents a new feature for a PR
 1. Dev finishes building a new "export to CSV" button.
-2. Runs `story record start "export-csv-feature"`.
+2. Runs `loomless record start "export-csv-feature"`.
 3. Clicks through the feature in the browser: opens the page, clicks
    Export, picks a date range, downloads the file, opens the CSV to show
    it's correct.
-4. Runs `story record stop`.
-5. Runs `story export --format md`, gets `export-csv-feature.md` with 5
+4. Runs `loomless record stop`.
+5. Runs `loomless export --format md`, gets `export-csv-feature.md` with 5
    steps, each with a screenshot and an auto-generated caption.
 6. Pastes the Markdown into the PR description. Reviewer sees exactly what
    the feature does without pulling the branch.

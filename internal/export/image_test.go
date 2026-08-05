@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // writeTestPNG creates a 100x100 solid-color PNG at dir/name, returning

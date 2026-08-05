@@ -1,5 +1,5 @@
-// Command story is the CLI (and, via "story mcp", the MCP server) for
-// Story's core loop: start a recording (which watches clicks
+// Command loomless is the CLI (and, via "loomless mcp", the MCP server) for
+// Loomless's core loop: start a recording (which watches clicks
 // automatically), capture manual and terminal steps, stop, and export to
 // Markdown/PDF/slides. Business logic lives in internal/engine, shared
 // with the MCP server — this file is presentation only (usage text,
@@ -19,10 +19,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/noorshikalgar/story/internal/capture"
-	"github.com/noorshikalgar/story/internal/editor"
-	"github.com/noorshikalgar/story/internal/engine"
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/editor"
+	"github.com/noorshikalgar/loomless/internal/engine"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func main() {
 	case "step":
 		err = cmdStep(os.Args[2:])
 	case "run":
-		err = cmdRun(os.Args[2:]) // exits the process itself on success paths; err is only non-nil for story-level failures
+		err = cmdRun(os.Args[2:]) // exits the process itself on success paths; err is only non-nil for loomless-level failures
 	case "windows":
 		err = cmdWindows(os.Args[2:])
 	case "export":
@@ -66,31 +66,31 @@ func main() {
 	}
 
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "story:", err)
+		fmt.Fprintln(os.Stderr, "loomless:", err)
 		os.Exit(1)
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `story — turn a working session into a readable story
+	fmt.Fprintln(os.Stderr, `loomless — turn a working session into a readable story
 
 Usage:
-  story record start <name> [--highlight] [--auto-caption]   Begin a session (auto-captures clicks)
-  story record stop             Finish the active session
-  story step ["note"]           Manually capture the frontmost window as a step
-  story run [--] <cmd> [args]   Run a command, capture it + its output as a step
-  story windows list            List candidate windows to capture
-  story export <name> [--format md|pdf|slides]   Render a session (default: md)
-  story edit <name>             Open the local web editor (reorder/hide/caption)
-  story tui                     Session dashboard — list, edit, export, all from the terminal
-  story mcp                     Run the MCP server (stdio) for agent-driven capture
+  loomless record start <name> [--highlight] [--auto-caption]   Begin a session (auto-captures clicks)
+  loomless record stop             Finish the active session
+  loomless step ["note"]           Manually capture the frontmost window as a step
+  loomless run [--] <cmd> [args]   Run a command, capture it + its output as a step
+  loomless windows list            List candidate windows to capture
+  loomless export <name> [--format md|pdf|slides]   Render a session (default: md)
+  loomless edit <name>             Open the local web editor (reorder/hide/caption)
+  loomless tui                     Session dashboard — list, edit, export, all from the terminal
+  loomless mcp                     Run the MCP server (stdio) for agent-driven capture
 
-Session data lives under ~/.story/sessions/<name>/.`)
+Session data lives under ~/.loomless/sessions/<name>/.`)
 }
 
 func cmdRecord(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story record start <name> | story record stop")
+		return fmt.Errorf("usage: loomless record start <name> | loomless record stop")
 	}
 	switch args[0] {
 	case "start":
@@ -119,12 +119,12 @@ func recordStart(args []string) error {
 			continue
 		}
 		if name != "" {
-			return fmt.Errorf("usage: story record start <name> [--highlight] [--auto-caption]")
+			return fmt.Errorf("usage: loomless record start <name> [--highlight] [--auto-caption]")
 		}
 		name = a
 	}
 	if name == "" {
-		return fmt.Errorf("usage: story record start <name> [--highlight] [--auto-caption]")
+		return fmt.Errorf("usage: loomless record start <name> [--highlight] [--auto-caption]")
 	}
 
 	dir, watching, warning, err := engine.StartRecording(name, highlightClicks, autoCaption)
@@ -133,8 +133,8 @@ func recordStart(args []string) error {
 	}
 	fmt.Printf("Recording %q started (%s)\n", name, dir)
 	if !watching {
-		fmt.Fprintln(os.Stderr, "story: warning: automatic click capture not available:", warning)
-		fmt.Fprintln(os.Stderr, "story: you can still use 'story step \"note\"' to capture manually")
+		fmt.Fprintln(os.Stderr, "loomless: warning: automatic click capture not available:", warning)
+		fmt.Fprintln(os.Stderr, "loomless: you can still use 'loomless step \"note\"' to capture manually")
 		return nil
 	}
 	var extras []string
@@ -145,9 +145,9 @@ func recordStart(args []string) error {
 		extras = append(extras, "auto-captions enabled")
 	}
 	if len(extras) > 0 {
-		fmt.Printf("Watching clicks (%s) — use 'story step \"note\"' to add notes without a click.\n", strings.Join(extras, ", "))
+		fmt.Printf("Watching clicks (%s) — use 'loomless step \"note\"' to add notes without a click.\n", strings.Join(extras, ", "))
 	} else {
-		fmt.Println("Watching clicks — use 'story step \"note\"' to add notes without a click.")
+		fmt.Println("Watching clicks — use 'loomless step \"note\"' to add notes without a click.")
 	}
 	return nil
 }
@@ -165,7 +165,7 @@ func recordStop() error {
 // see engine.RunClickDaemon.
 func runClickDaemon(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story __click-daemon <session-name> [--highlight] [--auto-caption]")
+		return fmt.Errorf("usage: loomless __click-daemon <session-name> [--highlight] [--auto-caption]")
 	}
 	highlightClicks := false
 	autoCaption := false
@@ -186,7 +186,7 @@ func runClickDaemon(args []string) error {
 // — see engine.RunIdleWatchdog.
 func runIdleWatchdog(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story __idle-watchdog <session-name>")
+		return fmt.Errorf("usage: loomless __idle-watchdog <session-name>")
 	}
 	return engine.RunIdleWatchdog(args[0], func(format string, a ...any) {
 		fmt.Printf(format+"\n", a...)
@@ -208,7 +208,7 @@ func cmdStep(args []string) error {
 	}
 	fmt.Println()
 	if warning != "" {
-		fmt.Fprintln(os.Stderr, "story: warning:", warning)
+		fmt.Fprintln(os.Stderr, "loomless: warning:", warning)
 	}
 	warnIfMasked(step)
 	return nil
@@ -218,16 +218,16 @@ func cmdStep(args []string) error {
 // ever printing the matched content itself — see internal/mask.
 func warnIfMasked(step session.Step) {
 	if len(step.Masked) > 0 {
-		fmt.Fprintf(os.Stderr, "story: masked possible secret(s) in step %d (%s)\n", step.Index, strings.Join(step.Masked, ", "))
+		fmt.Fprintf(os.Stderr, "loomless: masked possible secret(s) in step %d (%s)\n", step.Index, strings.Join(step.Masked, ", "))
 	}
 }
 
-// cmdRun implements "story run [--] <command> [args...]": the explicit,
+// cmdRun implements "loomless run [--] <command> [args...]": the explicit,
 // per-command terminal capture wrapper (decision #6 in
 // docs/product/11-decisions.md — not a full-shell-session hook). The
 // command runs exactly as given, no shell interpretation, so pipes/globs
 // need an explicit `sh -c "..."` if the caller wants them. Tees the
-// command's real output live to the terminal — running under "story run"
+// command's real output live to the terminal — running under "loomless run"
 // should look like running the command directly, not swallow its output
 // while capturing it.
 func cmdRun(args []string) error {
@@ -235,25 +235,25 @@ func cmdRun(args []string) error {
 		args = args[1:]
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story run [--] <command> [args...]")
+		return fmt.Errorf("usage: loomless run [--] <command> [args...]")
 	}
 
 	step, exitCode, err := engine.RunCommand(args, os.Stdout, os.Stderr)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "story: step %d captured (exit %d)\n", step.Index, exitCode)
+	fmt.Fprintf(os.Stderr, "loomless: step %d captured (exit %d)\n", step.Index, exitCode)
 	warnIfMasked(step)
 
-	// Propagate the wrapped command's own exit code so "story run --
-	// make test && story record stop" chains the way a caller expects.
+	// Propagate the wrapped command's own exit code so "loomless run --
+	// make test && loomless record stop" chains the way a caller expects.
 	os.Exit(exitCode)
 	return nil
 }
 
 func cmdWindows(args []string) error {
 	if len(args) < 1 || args[0] != "list" {
-		return fmt.Errorf("usage: story windows list")
+		return fmt.Errorf("usage: loomless windows list")
 	}
 	windows, err := capture.List()
 	if err != nil {
@@ -282,13 +282,13 @@ func cmdExport(args []string) error {
 			i++
 		default:
 			if name != "" {
-				return fmt.Errorf("usage: story export <name> [--format md|pdf|slides]")
+				return fmt.Errorf("usage: loomless export <name> [--format md|pdf|slides]")
 			}
 			name = args[i]
 		}
 	}
 	if name == "" {
-		return fmt.Errorf("usage: story export <name> [--format md|pdf|slides]")
+		return fmt.Errorf("usage: loomless export <name> [--format md|pdf|slides]")
 	}
 
 	switch format {
@@ -326,7 +326,7 @@ func cmdMCP(args []string) error {
 // it in the default browser, and serves until Ctrl+C.
 func cmdEdit(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: story edit <name>")
+		return fmt.Errorf("usage: loomless edit <name>")
 	}
 	name := args[0]
 

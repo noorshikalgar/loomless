@@ -203,7 +203,7 @@ func TestRenameToSameNameIsANoOp(t *testing.T) {
 }
 
 // TestRenameFollowsCurrentPointer confirms renaming the session that
-// "story record stop"/"story step" would currently target keeps working
+// "loomless record stop"/"loomless step" would currently target keeps working
 // after the rename — otherwise a rename would silently orphan the
 // "current" pointer at a name that no longer exists on disk.
 func TestRenameFollowsCurrentPointer(t *testing.T) {

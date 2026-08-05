@@ -30,7 +30,7 @@ regardless of which phase a change belongs to.
 ## Commit messages
 
 [Conventional Commits](https://www.conventionalcommits.org/): `type(scope):
-summary`, e.g. `feat(cli): add story record start command`. Common types:
+summary`, e.g. `feat(cli): add loomless record start command`. Common types:
 `feat`, `fix`, `docs`, `chore`, `refactor`, `test`.
 
 ## Before opening a PR

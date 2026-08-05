@@ -1,4 +1,4 @@
-module github.com/noorshikalgar/story
+module github.com/noorshikalgar/loomless
 
 go 1.26.5
 

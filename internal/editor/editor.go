@@ -1,4 +1,4 @@
-// Package editor is Story's local web editor (Phase 2's "local editor,"
+// Package editor is Loomless's local web editor (Phase 2's "local editor,"
 // per docs/product/03-features.md and open question #12 in
 // docs/product/10-open-questions.md) — a localhost-only HTTP server
 // serving a single-page app that lets a human reorder steps, hide ones
@@ -32,8 +32,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/noorshikalgar/story/internal/export"
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/export"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // imageFilePattern matches the only image filenames this project ever

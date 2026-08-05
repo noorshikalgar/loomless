@@ -88,7 +88,7 @@ func List() ([]WindowInfo, error) {
 // using the macOS `screencapture` tool's region flag, which takes point
 // coordinates and handles Retina backing-scale conversion itself.
 func Screenshot(w WindowInfo) ([]byte, error) {
-	tmp, err := os.CreateTemp("", "story-capture-*.png")
+	tmp, err := os.CreateTemp("", "loomless-capture-*.png")
 	if err != nil {
 		return nil, fmt.Errorf("create temp screenshot file: %w", err)
 	}

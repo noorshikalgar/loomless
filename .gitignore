@@ -13,7 +13,7 @@ Thumbs.db
 # --- Go (capture engine candidate) ---
 /bin/
 /dist/
-/story
+/loomless
 *.exe
 *.test
 *.out
@@ -28,6 +28,6 @@ npm-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# --- Story's own local session data (never commit raw captures) ---
-.story/
-*.story-session/
+# --- Loomless's own local session data (never commit raw captures) ---
+.loomless/
+*.loomless-session/

@@ -6,7 +6,7 @@ this phasing is final — see `09-roadmap.md` and `10-open-questions.md`.
 
 ## MVP — capture
 
-- Start / stop a recording session from the CLI (`story record start /
+- Start / stop a recording session from the CLI (`loomless record start /
   stop`).
 - Capture on every mouse click: screenshot + click coordinates + (where
   resolvable) the UI element under the cursor.

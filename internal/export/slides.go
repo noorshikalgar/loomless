@@ -6,7 +6,7 @@ import (
 	"html"
 	"strings"
 
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // Slides renders a session as a single self-contained HTML slide deck —

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 func withTestHome(t *testing.T) {
@@ -201,7 +201,7 @@ func TestTUIModelStopEditorWithNothingRunningSetsErrorStatus(t *testing.T) {
 // step does (session.Create) without actually forking the real click
 // daemon — engine.StartRecording relaunches the current executable as a
 // background process, which in a `go test` binary is the compiled test
-// binary itself, not the story CLI; spawning that for real here would be
+// binary itself, not the loomless CLI; spawning that for real here would be
 // unpredictable (wrong argv for the test binary's own flag parsing) and
 // exactly the kind of real-subprocess side effect a unit test shouldn't
 // have. The actual background-process plumbing is covered separately by

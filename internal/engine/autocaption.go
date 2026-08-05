@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noorshikalgar/story/internal/capture"
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // buildAutoCaption composes a short, local, zero-cost caption describing
@@ -63,7 +63,7 @@ func buildAutoCaption(elem capture.AXElement, elemOK bool, windowApp string, foc
 // polishCaptionAsync fires a best-effort, non-blocking rewrite of an
 // already-saved local caption through an LLM, entirely optional
 // (decision #33, extended by decision #34 to more than one provider):
-// only attempted when STORY_LLM_PROVIDER names a configured provider,
+// only attempted when LOOMLESS_LLM_PROVIDER names a configured provider,
 // and never on the click-capture hot path itself — buildAutoCaption's
 // result is already a complete, correct caption saved via AppendStep
 // before this is even called, so a slow network, a missing/misconfigured
@@ -114,16 +114,16 @@ func rewritePromptFor(caption string) string {
 		"Input: " + caption
 }
 
-// selectLLMProvider reads STORY_LLM_PROVIDER and returns the matching
+// selectLLMProvider reads LOOMLESS_LLM_PROVIDER and returns the matching
 // provider, fully configured from that provider's own env vars — or
 // (nil, nil) if the env var isn't set at all, which is the normal,
 // silent "no LLM polish" case every user starts in. Deliberately an
 // EXPLICIT env var, not auto-detection by scanning for whichever API
 // key happens to be set (decision #34): a user might have
 // ANTHROPIC_API_KEY exported for something else entirely (e.g. Claude
-// Code itself) with no intention of Story spending it on caption
+// Code itself) with no intention of Loomless spending it on caption
 // rewrites — silently picking that up would be a surprise, not a
-// convenience. An error is returned only when STORY_LLM_PROVIDER names
+// convenience. An error is returned only when LOOMLESS_LLM_PROVIDER names
 // a real provider but that provider's own required config is missing
 // (e.g. "openai" with no OPENAI_API_KEY set) — a likely typo/oversight
 // worth logging once, unlike "provider unset," which needs no comment.
@@ -134,13 +134,13 @@ func rewritePromptFor(caption string) string {
 // exercise these providers against a local httptest.Server instead of
 // spending real API credits.
 func selectLLMProvider() (llmProvider, error) {
-	switch os.Getenv("STORY_LLM_PROVIDER") {
+	switch os.Getenv("LOOMLESS_LLM_PROVIDER") {
 	case "":
 		return nil, nil
 	case "anthropic":
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
 		if apiKey == "" {
-			return nil, fmt.Errorf("STORY_LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
+			return nil, fmt.Errorf("LOOMLESS_LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
 		}
 		model := os.Getenv("ANTHROPIC_MODEL")
 		if model == "" {
@@ -154,7 +154,7 @@ func selectLLMProvider() (llmProvider, error) {
 	case "openai":
 		apiKey := os.Getenv("OPENAI_API_KEY")
 		if apiKey == "" {
-			return nil, fmt.Errorf("STORY_LLM_PROVIDER=openai but OPENAI_API_KEY is not set")
+			return nil, fmt.Errorf("LOOMLESS_LLM_PROVIDER=openai but OPENAI_API_KEY is not set")
 		}
 		model := os.Getenv("OPENAI_MODEL")
 		if model == "" {
@@ -171,7 +171,7 @@ func selectLLMProvider() (llmProvider, error) {
 			apiKey = os.Getenv("GOOGLE_API_KEY")
 		}
 		if apiKey == "" {
-			return nil, fmt.Errorf("STORY_LLM_PROVIDER=gemini but GEMINI_API_KEY (or GOOGLE_API_KEY) is not set")
+			return nil, fmt.Errorf("LOOMLESS_LLM_PROVIDER=gemini but GEMINI_API_KEY (or GOOGLE_API_KEY) is not set")
 		}
 		model := os.Getenv("GEMINI_MODEL")
 		if model == "" {
@@ -193,7 +193,7 @@ func selectLLMProvider() (llmProvider, error) {
 		}
 		return &ollamaProvider{model: model, baseURL: strings.TrimSuffix(host, "/") + "/api/generate"}, nil
 	default:
-		return nil, fmt.Errorf("unknown STORY_LLM_PROVIDER %q (want anthropic, openai, gemini, or ollama)", os.Getenv("STORY_LLM_PROVIDER"))
+		return nil, fmt.Errorf("unknown LOOMLESS_LLM_PROVIDER %q (want anthropic, openai, gemini, or ollama)", os.Getenv("LOOMLESS_LLM_PROVIDER"))
 	}
 }
 

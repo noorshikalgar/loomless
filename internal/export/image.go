@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/noorshikalgar/story/internal/capture"
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // stepHeading returns a step's display title — the user-editable

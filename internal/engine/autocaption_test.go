@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noorshikalgar/story/internal/capture"
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 func TestBuildAutoCaption(t *testing.T) {
@@ -225,10 +225,10 @@ func TestOllamaProviderSendsExpectedRequestAndParsesResponse(t *testing.T) {
 }
 
 // TestSelectLLMProviderUnsetIsANoOp confirms the default state (no
-// STORY_LLM_PROVIDER at all) returns (nil, nil) — not an error, not a
+// LOOMLESS_LLM_PROVIDER at all) returns (nil, nil) — not an error, not a
 // provider — which is what every user who never configured this sees.
 func TestSelectLLMProviderUnsetIsANoOp(t *testing.T) {
-	t.Setenv("STORY_LLM_PROVIDER", "")
+	t.Setenv("LOOMLESS_LLM_PROVIDER", "")
 	p, err := selectLLMProvider()
 	if p != nil || err != nil {
 		t.Errorf("selectLLMProvider() with no env var = (%v, %v), want (nil, nil)", p, err)
@@ -240,10 +240,10 @@ func TestSelectLLMProviderUnsetIsANoOp(t *testing.T) {
 // (a likely typo/oversight worth telling the user about), not silently
 // treated the same as "provider not configured at all."
 func TestSelectLLMProviderMissingKeyIsAnError(t *testing.T) {
-	t.Setenv("STORY_LLM_PROVIDER", "openai")
+	t.Setenv("LOOMLESS_LLM_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "")
 	if _, err := selectLLMProvider(); err == nil {
-		t.Error("selectLLMProvider() with STORY_LLM_PROVIDER=openai and no OPENAI_API_KEY succeeded, want an error")
+		t.Error("selectLLMProvider() with LOOMLESS_LLM_PROVIDER=openai and no OPENAI_API_KEY succeeded, want an error")
 	}
 }
 
@@ -251,7 +251,7 @@ func TestSelectLLMProviderMissingKeyIsAnError(t *testing.T) {
 // name fails loudly instead of silently doing nothing, which would be
 // much harder to notice.
 func TestSelectLLMProviderUnknownNameIsAnError(t *testing.T) {
-	t.Setenv("STORY_LLM_PROVIDER", "chatgpt") // not a real provider name here
+	t.Setenv("LOOMLESS_LLM_PROVIDER", "chatgpt") // not a real provider name here
 	if _, err := selectLLMProvider(); err == nil {
 		t.Error("selectLLMProvider() with an unknown provider name succeeded, want an error")
 	}
@@ -263,7 +263,7 @@ func TestSelectLLMProviderUnknownNameIsAnError(t *testing.T) {
 // Gemini's GOOGLE_API_KEY fallback.
 func TestSelectLLMProviderPicksEachProviderCorrectly(t *testing.T) {
 	t.Run("anthropic", func(t *testing.T) {
-		t.Setenv("STORY_LLM_PROVIDER", "anthropic")
+		t.Setenv("LOOMLESS_LLM_PROVIDER", "anthropic")
 		t.Setenv("ANTHROPIC_API_KEY", "a-key")
 		t.Setenv("ANTHROPIC_MODEL", "custom-model")
 		p, err := selectLLMProvider()
@@ -279,7 +279,7 @@ func TestSelectLLMProviderPicksEachProviderCorrectly(t *testing.T) {
 		}
 	})
 	t.Run("openai", func(t *testing.T) {
-		t.Setenv("STORY_LLM_PROVIDER", "openai")
+		t.Setenv("LOOMLESS_LLM_PROVIDER", "openai")
 		t.Setenv("OPENAI_API_KEY", "o-key")
 		p, err := selectLLMProvider()
 		if err != nil {
@@ -290,7 +290,7 @@ func TestSelectLLMProviderPicksEachProviderCorrectly(t *testing.T) {
 		}
 	})
 	t.Run("gemini via GOOGLE_API_KEY fallback", func(t *testing.T) {
-		t.Setenv("STORY_LLM_PROVIDER", "gemini")
+		t.Setenv("LOOMLESS_LLM_PROVIDER", "gemini")
 		t.Setenv("GEMINI_API_KEY", "")
 		t.Setenv("GOOGLE_API_KEY", "g-key")
 		p, err := selectLLMProvider()
@@ -306,7 +306,7 @@ func TestSelectLLMProviderPicksEachProviderCorrectly(t *testing.T) {
 		}
 	})
 	t.Run("ollama needs no API key", func(t *testing.T) {
-		t.Setenv("STORY_LLM_PROVIDER", "ollama")
+		t.Setenv("LOOMLESS_LLM_PROVIDER", "ollama")
 		t.Setenv("OLLAMA_HOST", "http://localhost:9999")
 		p, err := selectLLMProvider()
 		if err != nil {
@@ -324,11 +324,11 @@ func TestSelectLLMProviderPicksEachProviderCorrectly(t *testing.T) {
 
 // TestPolishCaptionAsyncNoOpWithoutProvider confirms the optional-LLM
 // path (decision #33/#34) does nothing at all — no network call, no
-// session mutation — when STORY_LLM_PROVIDER isn't set, which must be
+// session mutation — when LOOMLESS_LLM_PROVIDER isn't set, which must be
 // true by default for every user who never configured one.
 func TestPolishCaptionAsyncNoOpWithoutProvider(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("STORY_LLM_PROVIDER", "")
+	t.Setenv("LOOMLESS_LLM_PROVIDER", "")
 
 	if _, _, err := session.Create("nopolish"); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -359,12 +359,12 @@ func TestPolishCaptionAsyncNoOpWithoutProvider(t *testing.T) {
 
 // TestPolishCaptionAsyncUpdatesNoteWhenConfigured confirms the full
 // opt-in path end to end through the real selectLLMProvider lookup
-// (STORY_LLM_PROVIDER=anthropic, ANTHROPIC_BASE_URL pointed at a mock
+// (LOOMLESS_LLM_PROVIDER=anthropic, ANTHROPIC_BASE_URL pointed at a mock
 // server): the async rewrite eventually lands as the step's new Note
 // via session.EditNote.
 func TestPolishCaptionAsyncUpdatesNoteWhenConfigured(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("STORY_LLM_PROVIDER", "anthropic")
+	t.Setenv("LOOMLESS_LLM_PROVIDER", "anthropic")
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

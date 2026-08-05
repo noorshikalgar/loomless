@@ -61,7 +61,7 @@ only fixable later (at edit/export time), and roughly how.
   of images. Needs a plan for local storage limits, cleanup of
   old/discarded sessions, and image compression, or this quietly eats
   disk space.
-- **Recording left running accidentally** — a forgotten `story record
+- **Recording left running accidentally** — a forgotten `loomless record
   start` running for hours captures irrelevant clicks and burns storage.
   Catchable early with a soft idle-timeout warning ("still recording —
   stop?") after a period of inactivity.

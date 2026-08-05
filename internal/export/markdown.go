@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // Markdown renders a session as an ordered list of steps, each with its

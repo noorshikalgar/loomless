@@ -3,7 +3,7 @@ package editor
 import (
 	"sync"
 
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // editSnapshot captures a step's full editable surface — image bytes,
@@ -39,7 +39,7 @@ func cloneCrop(c *session.CropRect) *session.CropRect {
 }
 
 // editHistory is in-memory, per-step undo/redo/reset state scoped to one
-// running "story edit" process — not persisted. This is deliberately
+// running "loomless edit" process — not persisted. This is deliberately
 // ephemeral (decision #17): the durable record of what changed is
 // Session.EditLog, written to by every mutating session function
 // regardless of history state; editHistory just makes "oops, undo that"

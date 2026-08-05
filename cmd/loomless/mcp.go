@@ -1,4 +1,4 @@
-// story mcp: the agent-driven capture path (Phase 1.5, per
+// loomless mcp: the agent-driven capture path (Phase 1.5, per
 // docs/product/09-roadmap.md) — an MCP server exposing the same
 // internal/engine that the CLI uses, over stdio, per Scenario B in
 // docs/product/04-usage-scenarios.md. An agent (Claude Code, say) calls
@@ -14,20 +14,20 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/noorshikalgar/story/internal/capture"
-	"github.com/noorshikalgar/story/internal/engine"
+	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/engine"
 )
 
 func runMCPServer(ctx context.Context) error {
 	server := mcp.NewServer(&mcp.Implementation{
-		Name:        "story",
+		Name:        "loomless",
 		Version:     "0.1.0",
 		Description: "Capture a working session as a structured, skimmable story instead of a video.",
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "start_recording",
-		Description: "Begin a new Story recording session. Also starts automatic " +
+		Description: "Begin a new Loomless recording session. Also starts automatic " +
 			"click capture in the background (best-effort — needs macOS " +
 			"Accessibility permission; if unavailable, the session still works " +
 			"via capture_step/run_command). Call this once at the start of a " +

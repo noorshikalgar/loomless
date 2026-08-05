@@ -64,7 +64,7 @@ Phase 0, not element-level.
 Implementation note (macOS first, per platform-order default): use the
 built-in `screencapture -l <windowID>` rather than a full-display grab, with
 window ID resolved via `osascript`/System Events for the frontmost window,
-or from a `story windows list` picker for a specific one. No CGO/Accessibility
+or from a `loomless windows list` picker for a specific one. No CGO/Accessibility
 global-hook dependency needed for this — keeps the Phase 0 spike buildable
 without extra OS permission prompts beyond Screen Recording.
 
@@ -74,7 +74,7 @@ without extra OS permission prompts beyond Screen Recording.
 
 ## 6. Terminal capture scope — **explicit wrapper, not full shell session**
 
-Decided 2026-08-03 (resolves open question #8). `story run -- <command>`
+Decided 2026-08-03 (resolves open question #8). `loomless run -- <command>`
 runs one command as a subprocess and captures its output as a step —
 it does not attach to or tee the user's actual interactive shell.
 
@@ -85,7 +85,7 @@ every command the user runs for the entire recording — including ones
 that have nothing to do with the story and are more likely to contain
 secrets never meant for the output. An explicit per-command wrapper only
 captures what's deliberately routed through it, at the cost of the user
-needing to type `story run --` in front of commands they want captured.
+needing to type `loomless run --` in front of commands they want captured.
 
 Long output is truncated to a head/tail preview in the rendered story
 (per `07-edge-cases.md`); full raw output is always saved alongside the
@@ -102,16 +102,16 @@ tokens, JWTs, PEM private-key blocks, and `label=value`/`--flag value`
 style assignments) and replaces matches with `«masked»` before any text
 touches disk. Applied unconditionally inside `session.AddStep` /
 `AddTerminalStep` — not something a caller opts into — so every current
-and future capture path (manual step, click daemon, `story run`, and the
+and future capture path (manual step, click daemon, `loomless run`, and the
 Phase 1.5 MCP server later) gets it automatically. Covers: step notes,
 window titles, terminal commands, and terminal output.
 
 **Scope, deliberately narrow:** text only. Screenshot pixels are not
 scanned — per `07-edge-cases.md`, reliable secret detection in arbitrary
 pixel content needs OCR, which is real Phase 2 "auto-blur" scope, not a
-Phase 1 pattern-match. And masking only governs what Story *saves*: a
-command run via `story run` still prints its real, unmasked output live to
-your actual terminal exactly as it would without Story — masking can't
+Phase 1 pattern-match. And masking only governs what Loomless *saves*: a
+command run via `loomless run` still prints its real, unmasked output live to
+your actual terminal exactly as it would without Loomless — masking can't
 and shouldn't suppress that, only what lands in `session.json` and the
 output log.
 
@@ -132,12 +132,12 @@ only, never matched content) — visible in the CLI output and in
 
 ## 8. MCP tool surface — the doc's 4, plus 2
 
-Decided 2026-08-03 (Phase 1.5, per `09-roadmap.md`). `story mcp` runs an
+Decided 2026-08-03 (Phase 1.5, per `09-roadmap.md`). `loomless mcp` runs an
 MCP server over stdio exposing `start_recording`, `capture_step`,
 `stop_recording`, `generate_story` — the exact 4 named in
 `03-features.md`/`04-usage-scenarios.md` Scenario B — plus two more:
 
-- `run_command`: the agent-facing equivalent of `story run`. Scenario B's
+- `run_command`: the agent-facing equivalent of `loomless run`. Scenario B's
   own example ("ran the failing test to see the exact error", "re-ran the
   test suite, all green") is literally an agent running commands and
   wanting them captured — without this tool the agent would have to use
@@ -149,15 +149,15 @@ MCP server over stdio exposing `start_recording`, `capture_step`,
   as the frontmost window before calling it — cheap, read-only, avoids
   capturing the wrong window blind.
 
-Implementation: `cmd/story/mcp.go` + a new `internal/engine` package.
+Implementation: `cmd/loomless/mcp.go` + a new `internal/engine` package.
 Business logic (session lifecycle, click-daemon start/stop, step capture,
-command execution, export) moved out of `cmd/story/main.go` into
+command execution, export) moved out of `cmd/loomless/main.go` into
 `internal/engine`, shared unchanged between the CLI and the MCP server —
 per `08-technical-considerations.md`'s "thin wrapper around the same
 engine's internal API." One hard invariant enforced there: nothing in
 `internal/engine` writes to `os.Stdout` — the MCP stdio transport uses
 stdout as the protocol stream, so a stray print would corrupt it. The
-CLI's live terminal echo for `story run` is a tee the CLI adds on top
+CLI's live terminal echo for `loomless run` is a tee the CLI adds on top
 (`engine.RunCommand` takes optional tee writers, nil from the MCP path).
 
 Verified against the real SDK client (`github.com/modelcontextprotocol/
@@ -225,7 +225,7 @@ fails loudly with a clear message rather than silently no-op'ing): X11
 needs the XTest/RECORD extension or a privileged input read, Wayland
 restricts global input observation entirely by design, and neither has
 the "shell out to a standard tool" escape hatch the rest of this backend
-uses. `story step`/`capture_step` and `story run`/`run_command` (manual
+uses. `loomless step`/`capture_step` and `loomless run`/`run_command` (manual
 capture) work today on Linux; only the automatic click daemon doesn't —
 the existing graceful-degradation path (record start warns and falls back
 to manual-only) already covers this correctly, unchanged.
@@ -237,7 +237,7 @@ this machine) with `Xvfb` (virtual framebuffer X server), `fluxbox` (a
 minimal window manager — required for `wmctrl`/`xdotool getactivewindow`
 to work at all, since bare Xvfb has no EWMH hints without one), `xdotool`,
 `wmctrl`, `xprop`, and `maim` installed, running a real `xterm` window.
-The actual cross-compiled Linux `story` binary was copied in and run
+The actual cross-compiled Linux `loomless` binary was copied in and run
 directly against that live session — not a simulation.
 
 This caught two real bugs that cross-compilation alone would never have
@@ -248,7 +248,7 @@ surfaced:
    by using `xprop -id <id> WM_CLASS` instead (ICCCM's real mechanism for
    this) and parsing its `"instance", "Class"` output.
 2. Independently, and worse: when window resolution failed (which it did,
-   because of bug #1), `story step` reported success with **no
+   because of bug #1), `loomless step` reported success with **no
    indication anything had gone wrong** — no window, no screenshot, no
    warning. Traced to `engine.CaptureStep` (`internal/engine/engine.go`),
    which silently discarded the resolution/screenshot error
@@ -257,7 +257,7 @@ surfaced:
    #8) — the pre-refactor CLI code had printed this warning; the
    extraction into `internal/engine` dropped it. Fixed by giving
    `CaptureStep` the same `(step, warning, err)` shape `StartRecording`
-   already uses, threaded through both the CLI's `story step` and the MCP
+   already uses, threaded through both the CLI's `loomless step` and the MCP
    `capture_step` tool's output.
 
 Bug #2 is the more important finding: it means a capture failure could
@@ -265,11 +265,12 @@ have been silently invisible on **any** platform, not just Linux — this
 project's own dogfooding on macOS just hadn't hit a window-resolution
 failure recently enough to notice, since Accessibility permission was
 already granted from earlier testing. Re-verified end to end after both
-fixes: `story windows list`, `record start` (correctly warns + falls back
-to manual since click-capture isn't implemented), `story step` (now shows
-`(XTerm — story-linux-test-window)` and saves a real screenshot), `story
-run`, `record stop`, and `export` all confirmed working against the live
-container session — screenshot bytes pulled out and visually inspected,
+fixes: `loomless windows list`, `record start` (correctly warns + falls back
+to manual since click-capture isn't implemented), `loomless step` (now shows
+`(XTerm — story-linux-test-window)` and saves a real screenshot),
+`loomless run`, `record stop`, and `export` all confirmed working against
+the live container session — screenshot bytes pulled out and visually
+inspected,
 not just checked for existence.
 
 **Still unverified:** Wayland (X11-only tools, as documented, will not
@@ -308,7 +309,7 @@ notification backend is logged, not fatal — the watchdog keeps running
 either way.
 
 Both the warn-after threshold and the check interval are overridable via
-`STORY_IDLE_WARN_AFTER`/`STORY_IDLE_CHECK_INTERVAL` env vars (Go duration
+`LOOMLESS_IDLE_WARN_AFTER`/`LOOMLESS_IDLE_CHECK_INTERVAL` env vars (Go duration
 strings, e.g. `5m`) — added for testability (verifying a 20-minute default
 without actually waiting 20 minutes) but just as legitimately useful for a
 real user who wants a shorter or longer threshold than the default.
@@ -332,7 +333,7 @@ test scale and the real 20-minutes-plus scale.
 
 ## 12. PDF export — direct session-to-PDF, pure Go, ASCII-sanitized text
 
-Decided 2026-08-03 (second Phase 2 item). `story export <name> --format
+Decided 2026-08-03 (second Phase 2 item). `loomless export <name> --format
 pdf` and the MCP `generate_story` tool's `format: "pdf"` render straight
 from `session.Session` to PDF via `internal/export/pdf.go`, using
 [`github.com/go-pdf/fpdf`](https://github.com/go-pdf/fpdf) — a pure-Go PDF
@@ -377,7 +378,7 @@ rather than expecting a surprise, but confirmed rather than assumed).
 ## 13. Slide-deck export — self-contained HTML, no CDN dependency
 
 Decided 2026-08-03 (third and final Phase 2 export format).
-`story export <name> --format slides` and the MCP `generate_story` tool's
+`loomless export <name> --format slides` and the MCP `generate_story` tool's
 `format: "slides"` render a single self-contained `.html` file
 (`internal/export/slides.go`) — one step per slide, step-through via
 on-screen Prev/Next buttons or arrow keys, screenshots embedded as base64
@@ -425,7 +426,7 @@ was independently confirmed correct by other means.
 ## 14. Local editor — web UI, resolves open question #12, real edit-log implementation of decision #4
 
 Decided 2026-08-03 (last Phase 2 item this pass — screenshot redaction is
-a separate follow-up, not included). `story edit <name>` runs a
+a separate follow-up, not included). `loomless edit <name>` runs a
 localhost-only (`127.0.0.1`, never `0.0.0.0` — this is a single-user local
 tool, not something to expose on a network) HTTP server
 (`internal/editor`) serving a single-page app: reorder steps, hide/show
@@ -494,14 +495,13 @@ Decided 2026-08-03, in response to a direct user question ("can the click
 highlight be configurable, if user wants it can else remove"). The
 automatic red-ring annotation on click-captured screenshots (decision #3
 in the original Phase 1 work) was previously always-on with no way to
-turn it off. `story record start <name> --no-highlight` and the MCP
+turn it off. `loomless record start <name> --no-highlight` and the MCP
 `start_recording` tool's `no_highlight: true` disable it — the daemon
 still captures a screenshot per click, just without the ring drawn on it.
 Default stays on (opt out, not opt in), since the annotation is more
 often useful than not for the primary bug-repro/PR-review use cases.
 
-Plumbing: the click daemon is a separate relaunched process (`story
-__click-daemon <name>`), so the flag has to travel as a real process
+Plumbing: the click daemon is a separate relaunched process (`loomless __click-daemon <name>`), so the flag has to travel as a real process
 argument, not just an in-memory bool — `engine.startBackgroundProcess`
 gained a variadic `extraArgs` parameter for this, reused by
 `startClickDaemon` to append `--no-highlight` when needed (the idle
@@ -529,7 +529,7 @@ configurability, and closing the follow-up flagged when the local editor
 first shipped (decision #14). Redaction (hide something sensitive) and
 manual highlighting (draw attention to something) are opposite intents
 but identical mechanics — click-and-drag a rectangle on a screenshot in
-`story edit` — so they shipped together rather than as separate passes.
+`loomless edit` — so they shipped together rather than as separate passes.
 
 - `capture.Redact(pngData, x, y, w, h)`: solid black fill. Deliberately
   solid, not blur — per `06-editing-and-versioning.md`'s redaction
@@ -609,7 +609,7 @@ methodology error for a real bug in the fix.
 interaction from "drag commits immediately" to draw → adjust (move the
 whole rectangle by dragging its body, resize from any of 4 corner
 handles) → explicit Apply/Cancel. Nothing reaches the server until
-Apply. Added `story edit`-scoped Undo/Redo/Reset per step, backed by
+Apply. Added `loomless edit`-scoped Undo/Redo/Reset per step, backed by
 `internal/editor/history.go` — an in-memory (not persisted; lost if the
 editor process exits) stack of previous image bytes, deliberately kept
 out of `session.EditImage`/`Session` itself: undo/redo history is
@@ -1019,7 +1019,7 @@ Escape to cancel without saving.
    the API that nothing had saved yet (proving the "still within the
    pair" focus check works, not just committing on every blur); edited
    the title field and clicked elsewhere on the page — confirmed both
-   fields committed together in one call. Ran `story export --format
+   fields committed together in one call. Ran `loomless export --format
    md` and confirmed the rendered Markdown used the custom title as its
    `##` heading and the edited app/title as the window line, while an
    untouched step in the same session still fell back to its default
@@ -1055,7 +1055,7 @@ new order.
 on/off toggle but defaulted it on ("more often useful than not"); direct
 feedback reversed that assessment ("not useful at all"). Kept as an
 explicit opt-in rather than removed outright, per "keep it optional if
-possible" — `story record start <name> --highlight` (was
+possible" — `loomless record start <name> --highlight` (was
 `--no-highlight` to opt *out*; now `--highlight` to opt *in*, same flag
 name repurposed for the opposite polarity since the meaning "the flag
 that's present when you want the ring" stays true either way) and the MCP
@@ -1167,7 +1167,7 @@ whatever comes next.
    exactly under the link text, not just plain glyphs that merely looked
    like a link.
 
-## 23. A real TUI (`story tui`) for session management
+## 23. A real TUI (`loomless tui`) for session management
 
 Decided 2026-08-03, direct request: *"make cli a proper TUI kind app,
 where it can show list session shortcuts to edit etc fully functional
@@ -1177,9 +1177,9 @@ that decision was specifically about the *visual editing* work
 it never claimed a TUI has no place in this project. Session
 *management* (which sessions exist, how big are they, jump into
 editing/exporting one) is exactly the kind of fast, keyboard-driven
-overview a TUI is good at, so `story tui` is additive: a third way to
-use Story alongside the scriptable CLI/MCP surface and the existing
-`story edit` web UI, not a replacement for either.
+overview a TUI is good at, so `loomless tui` is additive: a third way to
+use Loomless alongside the scriptable CLI/MCP surface and the existing
+`loomless edit` web UI, not a replacement for either.
 
 **Stack**: `github.com/charmbracelet/bubbletea` + `bubbles/list` +
 `lipgloss` — the de facto standard Go TUI toolkit (pure Go, no cgo,
@@ -1189,7 +1189,7 @@ chosen over hand-rolling raw ANSI/terminal handling for the same reason
 this project: a well-solved problem beats a partially-solved one.
 
 **New primitive**: `session.List()` — reads every directory under
-`~/.story/sessions`, loads each `session.json`, sorts by `StartedAt`
+`~/.loomless/sessions`, loads each `session.json`, sorts by `StartedAt`
 descending. A session directory that fails to load (corrupted or
 mid-write `session.json`) is skipped rather than failing the whole
 listing — one bad session shouldn't hide every other one.
@@ -1197,15 +1197,15 @@ listing — one bad session shouldn't hide every other one.
 **Scope of this first pass**: list sessions (name, step count, started
 time, a "● recording" marker for any session whose `StoppedAt` is still
 nil), open the selected session's existing local web editor (`e`/enter —
-reuses `internal/editor.NewHandler` exactly as `story edit` does,
+reuses `internal/editor.NewHandler` exactly as `loomless edit` does,
 listening on `127.0.0.1:0` and opening the system browser), export to
 any format (`m`/`p`/`s` — reuses `internal/engine`'s existing
 `ExportMarkdown`/`ExportPDF`/`ExportSlides`, the same functions the
 plain CLI calls), and refresh (`r`, since sessions can be created by a
-concurrently-running `story record start` or MCP client). Deliberately
+concurrently-running `loomless record start` or MCP client). Deliberately
 **not** in this pass: starting/stopping a recording from the TUI —
 `engine.StopRecording()` only operates on the single process-wide
-"current" session pointer `story record start` maintains, not an
+"current" session pointer `loomless record start` maintains, not an
 arbitrary session picked from a list, so wiring that up correctly needs
 new plumbing rather than just a new keybinding; and session deletion,
 which wasn't asked for and deserves its own confirm-before-destroy
@@ -1218,7 +1218,7 @@ likely to be gotten wrong in a TUI**: every state mutation
 bubbletea's single Update-loop goroutine, never inside an async
 `tea.Cmd` closure. `editor.NewHandler`, `net.Listen`, and the export
 functions are all fast, local, non-blocking calls (the export functions
-do the same synchronous disk I/O the plain `story export` CLI already
+do the same synchronous disk I/O the plain `loomless export` CLI already
 does with no progress indicator), so there was no real need to reach for
 `tea.Cmd`'s async-command-then-Msg pattern at all for this pass — doing
 so anyway would have meant either accepting a genuine data race on
@@ -1231,15 +1231,15 @@ the same session reuses the running server instead of binding a second
 port; all tracked servers are closed on quit (`ctrl+c`/`q`) before
 `tea.Quit`.
 
-`openBrowser` (previously a plain top-level func in `cmd/story/main.go`,
-shared with the existing `story edit` command) became a package-level
+`openBrowser` (previously a plain top-level func in `cmd/loomless/main.go`,
+shared with the existing `loomless edit` command) became a package-level
 `var` purely so tests could swap in a no-op recorder — otherwise every
 test run of the "open editor" action would pop open a real browser
 window.
 
 **Verified:**
 
-1. Unit tests (`cmd/story/tui_test.go`): session listing count and
+1. Unit tests (`cmd/loomless/tui_test.go`): session listing count and
    order, the recording-status marker on `Title()` for a stopped vs.
    unstopped session, that `export("md")` actually produces the file on
    disk (not just a non-error return), that `refresh()` picks up a
@@ -1291,8 +1291,8 @@ depends on them being right:**
    `session.Current()` — target and current were the same session by
    construction. Once a session can be stopped *by name* (next point),
    that guarantee is gone: stopping session A while B is actually current
-   would have silently clobbered B's pointer, breaking `story record
-   stop`/`story step` for a session nobody asked to touch. Fixed to only
+   would have silently clobbered B's pointer, breaking `loomless record
+   stop`/`loomless step` for a session nobody asked to touch. Fixed to only
    clear when `Current().Name` matches the session being stopped.
 2. New `engine.StopRecordingNamed(name)` — `StopRecording` restricted to
    the single global "current" session was never going to work for a TUI
@@ -1319,7 +1319,7 @@ Renaming to the session's own current name is treated as a no-op success
 (even while still recording, since nothing structurally changes), not an
 error.
 
-**TUI wiring** (`cmd/story/tui.go`): new keys `x` (stop the selected
+**TUI wiring** (`cmd/loomless/tui.go`): new keys `x` (stop the selected
 session's running editor server — the literal gap reported), `S` (stop
 recording, via `StopRecordingNamed`), `n` (new session), `c` (rename). `n`
 and `c` share one `bubbles/textinput`-based prompt (`inputPurpose`
@@ -1340,10 +1340,10 @@ set in list mode, just `enter confirm · esc cancel` while a prompt is
 open).
 
 **`engine.StartRecording` became a package-level `var startRecording`**
-in `cmd/story/tui.go` (same reasoning as `openBrowser` in decision #23):
+in `cmd/loomless/tui.go` (same reasoning as `openBrowser` in decision #23):
 it's the one action that forks a real background OS process. A test
 calling the real thing would relaunch `os.Executable()` — which, inside
-`go test`, *is the compiled test binary*, not the `story` CLI — with
+`go test`, *is the compiled test binary*, not the `loomless` CLI — with
 args like `__click-daemon`, an unpredictable thing to do in a unit test
 (confirmed by first writing the test against the real function, watching
 it actually spawn and querying `ps` for what showed up, then switching to
@@ -1360,7 +1360,7 @@ theoretically).
    — this last case is what caught the check-after-move ordering bug
    above), `engine_test.go` (`StopRecordingNamed` stops session A without
    disturbing session B's "current" status, and confirms `StopRecording`
-   still works normally afterward), `cmd/story/tui_test.go` (stop-editor
+   still works normally afterward), `cmd/loomless/tui_test.go` (stop-editor
    actually closes the server — confirmed via a real HTTP request before
    and after, not just the map entry disappearing; the full new-session
    prompt-to-disk flow via the injected `startRecording` fake, including
@@ -2341,7 +2341,7 @@ most.
    already-accepted gap: no click-capture on Linux yet means no click
    to ground an element query against there either).
 3. A real, non-mocked end-to-end plumbing check: built the actual CLI
-   binary and ran `story record start <name> --auto-caption` against
+   binary and ran `loomless record start <name> --auto-caption` against
    the live daemon-relaunch path (flag parsing → `StartRecording` →
    `startClickDaemon`'s subprocess relaunch with `--auto-caption` →
    `RunClickDaemon`), confirming the daemon starts cleanly, logs
@@ -2365,7 +2365,7 @@ most.
    Bash-launched Calculator process ran with zero open windows).
    This is a genuine environment constraint, not a reasoning gap —
    recommend a quick manual smoke test on a real interactive session
-   (`story record start test --auto-caption`, click a few labeled
+   (`loomless record start test --auto-caption`, click a few labeled
    buttons in a real app, check the resulting captions) before
    relying on this in practice.
 
@@ -2393,19 +2393,19 @@ Ollama has no key at all. Response shapes differ just as much
 text itself (`rewritePromptFor`, one function, reused by all four so a
 caption reads the same regardless of which backend answered it).
 
-**`STORY_LLM_PROVIDER` is required and explicit — no auto-detection by
+**`LOOMLESS_LLM_PROVIDER` is required and explicit — no auto-detection by
 scanning for whichever API key happens to be present.** The tempting
 alternative (if `ANTHROPIC_API_KEY` is set, just use it) has a real
 failure mode: plenty of people already export `ANTHROPIC_API_KEY` for
 unrelated reasons (Claude Code itself, another tool, a shell profile
-default) with zero intention of Story spending it on caption rewrites.
-Silently picking that up isn't a convenience, it's Story quietly making
+default) with zero intention of Loomless spending it on caption rewrites.
+Silently picking that up isn't a convenience, it's Loomless quietly making
 an API call the user never asked it to make. Naming a provider that
 turns out to be missing its own required key (e.g.
-`STORY_LLM_PROVIDER=openai` with no `OPENAI_API_KEY`) is treated as a
+`LOOMLESS_LLM_PROVIDER=openai` with no `OPENAI_API_KEY`) is treated as a
 real error worth logging once — almost certainly a typo or a forgotten
 export, not a state worth silently tolerating the way "no
-`STORY_LLM_PROVIDER` at all" is.
+`LOOMLESS_LLM_PROVIDER` at all" is.
 
 **Ollama is the one provider that needs no API key and sends nothing
 over the network by default** (`http://localhost:11434` unless
@@ -2439,14 +2439,14 @@ requiring real keys for CI.
    `GOOGLE_API_KEY` fallback and Ollama's host-to-baseURL construction.
    `polishCaptionAsync` re-verified end to end through the real
    `selectLLMProvider` lookup (not a bypassed seam) via
-   `STORY_LLM_PROVIDER=anthropic` + `ANTHROPIC_BASE_URL` pointed at a
+   `LOOMLESS_LLM_PROVIDER=anthropic` + `ANTHROPIC_BASE_URL` pointed at a
    mock server, confirming the full chain from env-var selection through
    to `session.EditNote` still works after the refactor.
 2. `go build/vet/gofmt` clean; cross-compiled clean for Linux.
 
 ## 35. TUI redesign: solid nvim-style status bar, live search, two-column detail view
 
-Decided 2026-08-05. The TUI (`story tui`, decisions #23/#24) was a flat,
+Decided 2026-08-05. The TUI (`loomless tui`, decisions #23/#24) was a flat,
 single-column session list with a plain-foreground status line and no
 way to see anything about a session besides its name, step count, and
 start time — reasonable for a first pass, but thin once someone
@@ -2456,8 +2456,8 @@ half-finished debugging sessions and needs to tell them apart fast,
 without opening each one in the browser editor just to check "did I
 already export this one?").
 
-**Dev/QA persona framing:** the person reaching for `story tui` instead
-of `story export <name>` directly is specifically someone who *doesn't
+**Dev/QA persona framing:** the person reaching for `loomless tui` instead
+of `loomless export <name>` directly is specifically someone who *doesn't
 remember the exact session name* or wants to browse — so the two things
 worth optimizing for are (a) narrowing the list fast (search) and (b)
 answering "what is this session, exactly" without leaving the list
@@ -2541,6 +2541,71 @@ is a glance instead of a `ls` in another terminal).
    mode block to NORMAL, and resizing the pty down to 35 columns
    correctly collapsed to the single-column fallback without a crash
    or layout corruption.
+
+## 36. Rename the product to Loomless
+
+Decided 2026-08-05. Publishing this repo to GitHub surfaced that its
+working name, "Story," was never actually the intended product name —
+the user's real product name is **Loomless**. Renamed the whole
+identity before publishing rather than after, since every public
+surface (module path, GitHub repo, binary users type, MCP server
+identity agents connect to) is far cheaper to get right before the
+first external clone/star/import than to migrate later.
+
+**What changed vs. what stayed on purpose:**
+
+- `go.mod` module path: `github.com/noorshikalgar/story` →
+  `github.com/noorshikalgar/loomless`, and every internal import updated
+  to match.
+- `cmd/story` → `cmd/loomless`; the binary/CLI command is now
+  `loomless` (`go build -o loomless ./cmd/loomless`).
+- The MCP server's own `Implementation.Name` is now `"loomless"`
+  (was `"story"`).
+- The local session-data root: `~/.story` → `~/.loomless`.
+- Config env vars: `STORY_LLM_PROVIDER` → `LOOMLESS_LLM_PROVIDER`,
+  `STORY_IDLE_WARN_AFTER`/`STORY_IDLE_CHECK_INTERVAL` →
+  `LOOMLESS_IDLE_WARN_AFTER`/`LOOMLESS_IDLE_CHECK_INTERVAL` — these are
+  part of the tool's public config surface (something a user or a CI
+  config might set), not internal detail, so they needed to move too.
+- Every doc (README, this decisions log, and `docs/product/*.md`),
+  usage/help text, and error-message prefix that named the tool
+  itself now says "Loomless"/`loomless`.
+- **Deliberately NOT renamed:** the word "story" everywhere it's used
+  as the generic noun for the *output artifact* the tool produces —
+  "turn a working session into a readable story," the MCP tool named
+  `generate_story`, doc comments like "the rendered story," "a repro
+  story." The product is Loomless; what Loomless produces is still,
+  correctly, called a story — that's the whole naming pun the tagline
+  already relies on, and collapsing that distinction would have made
+  the tagline read as a typo instead of a pun. Historical decision
+  entries above this one were updated where they referenced now-renamed
+  paths/commands (since e.g. `cmd/story/mcp.go` no longer exists and a
+  stale reference would just be wrong), but arbitrary test-fixture
+  strings from past verification runs (e.g. a Linux test window
+  literally titled `story-linux-test-window`) were left as an accurate
+  record of what was actually run at the time, not retroactively
+  rebranded.
+- **Also deliberately NOT renamed:** internal cgo C symbol names
+  (`storyStartEventTap`, `storyElementAt`, etc. in the `_darwin.go`
+  files) — these are private implementation-detail identifiers with
+  zero user-visible surface, and touching cgo code without being able
+  to re-verify the darwin build in this pass carried more risk than the
+  purely cosmetic benefit was worth.
+
+**Verified:**
+
+1. `go build/vet/gofmt ./...` clean, full `go test ./...` clean,
+   `GOOS=linux GOARCH=amd64` cross-compile clean.
+2. Grepped the whole repo (`\bstory\b`/`\bStory\b`, case-sensitive and
+   not) after the rename and manually classified every remaining hit —
+   confirmed each one is the intentional generic-noun usage described
+   above, not a missed identity reference.
+3. Real end-to-end CLI smoke test against the rebuilt `loomless`
+   binary: `loomless` with no args prints the renamed usage text;
+   `loomless record start`/`loomless step`/`loomless record stop`/
+   `loomless export` against a throwaway session confirmed data lands
+   under `~/.loomless/sessions/<name>/` and exports correctly, then the
+   throwaway session was deleted.
 
 ## GitHub remote
 

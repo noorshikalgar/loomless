@@ -1,4 +1,4 @@
-# Story — Product Doc (v0.1, draft for review)
+# Loomless — Product Doc (v0.1, draft for review)
 
 This is a first-pass product analysis, written to hand to an LLM (or a human PM)
 for review, questioning, and decision-making. It intentionally does **not**

@@ -1072,7 +1072,7 @@ const editorJS = `
   // ensureArrowheadMarker lazily injects ONE shared SVG <marker>
   // definition into the document, the first time any arrow annotation
   // is built — every arrow's polyline references it by the same id
-  // (marker-end="url(#story-arrowhead)"), so there's exactly one
+  // (marker-end="url(#loomless-arrowhead)"), so there's exactly one
   // definition regardless of how many arrows exist. fill="context-
   // stroke" (SVG2) makes the arrowhead automatically match whatever
   // color the referencing polyline's own stroke is set to, so recoloring
@@ -1088,7 +1088,7 @@ const editorJS = `
     svg.style.position = 'absolute';
     var defs = document.createElementNS(svgNS, 'defs');
     var marker = document.createElementNS(svgNS, 'marker');
-    marker.setAttribute('id', 'story-arrowhead');
+    marker.setAttribute('id', 'loomless-arrowhead');
     marker.setAttribute('viewBox', '0 0 10 10');
     marker.setAttribute('refX', '8');
     marker.setAttribute('refY', '5');
@@ -1188,7 +1188,7 @@ const editorJS = `
       poly.setAttribute('stroke-width', '4');
       poly.setAttribute('stroke-linecap', 'round');
       poly.setAttribute('stroke-linejoin', 'round');
-      if (kind === 'arrow') poly.setAttribute('marker-end', 'url(#story-arrowhead)');
+      if (kind === 'arrow') poly.setAttribute('marker-end', 'url(#loomless-arrowhead)');
       el.appendChild(svg);
       svg.appendChild(poly);
       renderStroke = function() {

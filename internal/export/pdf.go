@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-pdf/fpdf"
 
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 const (

@@ -1,4 +1,4 @@
-// Package session defines Story's on-disk session format: a folder per
+// Package session defines Loomless's on-disk session format: a folder per
 // recording containing session.json (ordered steps) and an images/
 // subfolder (one PNG per step). This is the "capture-time data" referenced
 // in docs/product/06-editing-and-versioning.md — written once per step and
@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noorshikalgar/story/internal/capture"
-	"github.com/noorshikalgar/story/internal/mask"
+	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/mask"
 )
 
 // Step is one captured moment in a session: either a window/click capture
@@ -31,7 +31,7 @@ type Step struct {
 	ImageFile   string    `json:"image_file,omitempty"` // relative to session dir
 
 	// Command/Output/OutputFile/ExitCode are set for steps captured via
-	// "story run -- <command>". Output is a possibly-truncated head/tail
+	// "loomless run -- <command>". Output is a possibly-truncated head/tail
 	// preview (see truncateOutput); OutputFile is the untruncated raw
 	// output, always saved regardless of size — see decision #6 in
 	// docs/product/11-decisions.md.
@@ -240,7 +240,7 @@ func boundingBox(points []Point) (x, y, w, h float64) {
 // so a Step's Index stays a stable reference to its original capture
 // (and its image_file/output_file names, which are derived from it).
 // DisplayOrder, Hidden, and EditLog are the presentation-time layer the
-// local editor (story edit) writes to: reordering, hiding, and captioning
+// local editor (loomless edit) writes to: reordering, hiding, and captioning
 // change how a story is *read*, not what was *captured*.
 type Session struct {
 	Name      string     `json:"name"`
@@ -273,16 +273,16 @@ type EditEntry struct {
 	NewValue  string    `json:"new_value,omitempty"`
 }
 
-// Root returns ~/.story, the base directory for all local session data.
+// Root returns ~/.loomless, the base directory for all local session data.
 func Root() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".story"), nil
+	return filepath.Join(home, ".loomless"), nil
 }
 
-// Dir returns the folder for a named session: ~/.story/sessions/<name>.
+// Dir returns the folder for a named session: ~/.loomless/sessions/<name>.
 func Dir(name string) (string, error) {
 	root, err := Root()
 	if err != nil {
@@ -329,7 +329,7 @@ func IdleWatchdogLogPath(dir string) string {
 	return filepath.Join(dir, "idle-watchdog.log")
 }
 
-// currentPath points at the session name that "story step" / "story record
+// currentPath points at the session name that "loomless step" / "loomless record
 // stop" act on when no name is given explicitly.
 func currentPath() (string, error) {
 	root, err := Root()
@@ -365,7 +365,7 @@ func Create(name string) (*Session, string, error) {
 	return s, dir, nil
 }
 
-// List returns every session found under ~/.story/sessions, sorted by
+// List returns every session found under ~/.loomless/sessions, sorted by
 // StartedAt descending (most recent first) — used by the TUI's session
 // list. A session directory that fails to load (corrupted or mid-write
 // session.json) is skipped rather than failing the whole listing, since
@@ -489,7 +489,7 @@ func Current() (*Session, string, error) {
 	}
 	b, err := os.ReadFile(p)
 	if err != nil {
-		return nil, "", fmt.Errorf("no active session (run 'story record start <name>' first): %w", err)
+		return nil, "", fmt.Errorf("no active session (run 'loomless record start <name>' first): %w", err)
 	}
 	return Load(string(b))
 }
@@ -527,7 +527,7 @@ func save(dir string, s *Session) error {
 
 // AppendStep reloads a session by name from disk, appends one step, and
 // saves — narrowing (not eliminating) the race window when the click
-// daemon and a manual "story step" might write concurrently, since each
+// daemon and a manual "loomless step" might write concurrently, since each
 // append starts from the latest on-disk state rather than a stale
 // in-memory copy.
 func AppendStep(name, note, windowApp, windowTitle string, image []byte) (Step, error) {
@@ -580,7 +580,7 @@ const (
 )
 
 // AppendTerminalStep reloads a session by name, appends a step captured
-// from "story run -- <command>", and saves. Mirrors AppendStep's
+// from "loomless run -- <command>", and saves. Mirrors AppendStep's
 // reload-then-append pattern for the same concurrent-writer reason.
 func AppendTerminalStep(name, command string, output []byte, exitCode int) (Step, error) {
 	s, dir, err := Load(name)

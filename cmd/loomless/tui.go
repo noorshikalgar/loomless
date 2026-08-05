@@ -13,9 +13,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/noorshikalgar/story/internal/editor"
-	"github.com/noorshikalgar/story/internal/engine"
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/editor"
+	"github.com/noorshikalgar/loomless/internal/engine"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // startRecording is a package-level var (not a direct call to
@@ -25,7 +25,7 @@ import (
 // actually forking one on every "create a new session" test run.
 var startRecording = engine.StartRecording
 
-// cmdTUI is the "story tui" entrypoint — a session-management dashboard
+// cmdTUI is the "loomless tui" entrypoint — a session-management dashboard
 // (list sessions, start/stop recordings, jump into the local web editor,
 // export, rename, refresh) alongside the existing scriptable CLI/MCP
 // surface, not a replacement for either. Decision #14 chose a
@@ -628,7 +628,7 @@ func (m *tuiModel) stopRecording() {
 
 // export renders the selected session in the given format synchronously
 // — export is normal disk I/O over a handful of already-captured PNGs,
-// the same work "story export" already does synchronously on the plain
+// the same work "loomless export" already does synchronously on the plain
 // CLI with no progress indicator, so doing it inline here (rather than
 // building out an async progress-spinner Cmd) is consistent with that
 // and keeps the TUI's concurrency model simple for this first pass.

@@ -61,7 +61,7 @@ func List() ([]WindowInfo, error) {
 // because it's purpose-built for headless region capture without
 // prompting for a display grab.
 func Screenshot(w WindowInfo) ([]byte, error) {
-	tmp, err := os.CreateTemp("", "story-capture-*.png")
+	tmp, err := os.CreateTemp("", "loomless-capture-*.png")
 	if err != nil {
 		return nil, fmt.Errorf("create temp screenshot file: %w", err)
 	}

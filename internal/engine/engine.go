@@ -1,13 +1,13 @@
-// Package engine holds Story's capture orchestration — starting/stopping a
+// Package engine holds Loomless's capture orchestration — starting/stopping a
 // recording (including the background click daemon), capturing manual and
 // terminal steps, and exporting — independent of any particular front end.
-// It exists so the CLI (cmd/story) and the MCP server (cmd/story's "mcp"
+// It exists so the CLI (cmd/loomless) and the MCP server (cmd/loomless's "mcp"
 // subcommand, for the agent-driven path in
 // docs/product/04-usage-scenarios.md Scenario B) share one implementation
 // instead of drifting apart. Nothing in this package writes to os.Stdout —
 // the MCP stdio transport uses stdout for the protocol stream, so any
 // stray write there would corrupt it; callers that want a live terminal
-// echo (the CLI's "story run") do that themselves.
+// echo (the CLI's "loomless run") do that themselves.
 package engine
 
 import (
@@ -25,10 +25,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/noorshikalgar/story/internal/capture"
-	"github.com/noorshikalgar/story/internal/export"
-	"github.com/noorshikalgar/story/internal/notify"
-	"github.com/noorshikalgar/story/internal/session"
+	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/export"
+	"github.com/noorshikalgar/loomless/internal/notify"
+	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 // clickDebounce collapses rapid/double clicks on (roughly) the same
@@ -91,7 +91,7 @@ func StopRecording() (*session.Session, error) {
 // StopRecordingNamed is StopRecording for an arbitrary session by name,
 // rather than only the single global "current" one — the TUI's
 // per-session stop action needs this, since the session a user has
-// selected in a list isn't necessarily the one `story record start` most
+// selected in a list isn't necessarily the one `loomless record start` most
 // recently marked current. Safe to call regardless of which session (if
 // any) is current: session.Session.Stop only clears the "current"
 // pointer when it's actually pointing at the session being stopped.
@@ -120,13 +120,13 @@ func stopRecordingNamed(name string) (*session.Session, error) {
 }
 
 // CaptureStep captures the frontmost window (best-effort) as a step on the
-// current session, with an optional note. Used by both "story step" and
+// current session, with an optional note. Used by both "loomless step" and
 // the MCP capture_step tool. The warning return surfaces a non-fatal
 // problem (couldn't resolve the frontmost window, or resolved it but the
 // screenshot itself failed) without making the whole capture an error — a
 // step with just a note and no screenshot is still a useful step. An
 // earlier version of this function discarded these silently (`_ = err`),
-// which meant "story step"/capture_step gave no indication anything had
+// which meant "loomless step"/capture_step gave no indication anything had
 // gone wrong even when every step came back with no window/image at all —
 // caught via the Linux backend's container-based testing
 // (docs/product/11-decisions.md #10), where a bug in the Linux
@@ -160,10 +160,10 @@ func CaptureStep(note string) (step session.Step, warning string, err error) {
 // program, args[1:] its arguments) on the current session, capturing its
 // combined stdout/stderr as a step. teeStdout/teeStderr, if non-nil, also
 // receive the live output as it happens — the CLI passes os.Stdout/Stderr
-// so "story run" behaves like running the command directly; the MCP
+// so "loomless run" behaves like running the command directly; the MCP
 // server passes nil, since stdout is the protocol stream there and must
 // never receive anything else. Returns the wrapped command's exit code
-// separately from err, which is reserved for story-level failures (no
+// separately from err, which is reserved for loomless-level failures (no
 // active session, the command couldn't even start).
 func RunCommand(args []string, teeStdout, teeStderr io.Writer) (step session.Step, exitCode int, err error) {
 	if len(args) < 1 {
@@ -365,7 +365,7 @@ func stopBackgroundProcess(pidPath string) {
 // findFailureLine scans the daemon log for a line indicating the click
 // hook failed to start, returning the first match. Deliberately scans the
 // whole file rather than just the last line: main()'s top-level error
-// handler also logs "story: <err>" after the daemon's own "click-daemon:
+// handler also logs "loomless: <err>" after the daemon's own "click-daemon:
 // failed: ..." line (both share the daemon's redirected stdout/stderr),
 // so a last-line-only check can land on that generic wrapper line instead
 // — which doesn't contain "failed" — and silently miss a real failure.
@@ -390,7 +390,7 @@ func findFailureLine(path string) (line string, found bool) {
 }
 
 // RunClickDaemon is the click-daemon process's entrypoint (relaunched by
-// startClickDaemon as "story __click-daemon <name>"): installs the global
+// startClickDaemon as "loomless __click-daemon <name>"): installs the global
 // click listener and, on every debounced click, captures the frontmost
 // window as a step. Runs until SIGTERM (sent by stopClickDaemon). Logging
 // goes through the provided logf so the CLI can direct it to the daemon's
@@ -517,11 +517,11 @@ func RunClickDaemon(name string, highlightClicks, autoCaption bool, logf func(fo
 // real user isn't stuck with a hardcoded threshold that doesn't fit how
 // they work.
 func idleWarnAfter() time.Duration {
-	return durationEnv("STORY_IDLE_WARN_AFTER", 20*time.Minute)
+	return durationEnv("LOOMLESS_IDLE_WARN_AFTER", 20*time.Minute)
 }
 
 func idleCheckInterval() time.Duration {
-	return durationEnv("STORY_IDLE_CHECK_INTERVAL", time.Minute)
+	return durationEnv("LOOMLESS_IDLE_CHECK_INTERVAL", time.Minute)
 }
 
 func durationEnv(key string, def time.Duration) time.Duration {
@@ -534,7 +534,7 @@ func durationEnv(key string, def time.Duration) time.Duration {
 }
 
 // RunIdleWatchdog is the idle-watchdog process's entrypoint (relaunched by
-// startIdleWatchdog as "story __idle-watchdog <name>"): periodically
+// startIdleWatchdog as "loomless __idle-watchdog <name>"): periodically
 // checks how long it's been since the session's last step and sends a
 // desktop notification once that exceeds idleWarnAfter — the "still
 // recording — stop?" soft nudge from docs/product/07-edge-cases.md, for a
@@ -580,7 +580,7 @@ func RunIdleWatchdog(name string, logf func(format string, args ...any)) error {
 				continue
 			}
 			msg := fmt.Sprintf("%q has had no activity for %s — still recording?", name, idleFor.Round(time.Second))
-			if err := notify.Send("Story", msg); err != nil {
+			if err := notify.Send("Loomless", msg); err != nil {
 				logf("idle-watchdog: notify failed: %v", err)
 			} else {
 				logf("idle-watchdog: notified (%s idle)", idleFor.Round(time.Second))
