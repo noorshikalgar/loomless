@@ -5,11 +5,33 @@ import "html"
 func indexHTML(name string) string {
 	return `<!doctype html>
 <html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Edit — ` + html.EscapeString(name) + `</title>
 <link rel="icon" type="image/svg+xml" href="` + faviconDataURI + `">
+<script>(function() {
+  try {
+    document.documentElement.dataset.theme = localStorage.getItem('loomless-editor-theme') || 'loomless';
+  } catch (e) {}
+})();</script>
 <style>` + editorCSS + `</style>
 </head><body>
-<h1>` + html.EscapeString(name) + `</h1>
+<div class="page-header">
+  <h1>` + html.EscapeString(name) + `</h1>
+  <div class="theme-picker">
+    <select id="themeSelect" title="Theme" aria-label="Theme">
+      <option value="loomless">Loomless Dark</option>
+      <option value="tokyo-night">Tokyo Night</option>
+      <option value="gruvbox">Gruvbox</option>
+      <option value="github-dark">GitHub Dark</option>
+    </select>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <path d="M12 3a9 9 0 100 18c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.4-.3-.4-.5-.8-.5-1.3 0-.9.7-1.6 1.6-1.6H16a5 5 0 005-5c0-3.9-4-6.7-9-6.7z" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <circle cx="7.5" cy="10.5" r="1.1" fill="currentColor"/>
+      <circle cx="10.5" cy="7" r="1.1" fill="currentColor"/>
+      <circle cx="15" cy="7.5" r="1.1" fill="currentColor"/>
+    </svg>
+  </div>
+</div>
 <p class="hint">Reorder, hide, or edit captions — changes are saved immediately. Export whenever you're ready:</p>
 <div class="export-row">
   <button class="export-btn" data-format="md">Export Markdown</button>
@@ -20,7 +42,7 @@ func indexHTML(name string) string {
 <div id="steps"></div>
 <div class="editor-modal-overlay" id="editorModalOverlay">
   <div class="editor-modal">
-    <button class="editor-modal-close" id="editorModalClose">&times; Close</button>
+    <button class="editor-modal-close" id="editorModalClose" aria-label="Close focused view">&times; Close</button>
     <div class="editor-modal-label" id="editorModalLabel"></div>
     <div class="editor-modal-body" id="editorModalBody"></div>
   </div>
@@ -31,32 +53,77 @@ func indexHTML(name string) string {
 }
 
 const editorCSS = `
-  :root { color-scheme: dark; }
+  /* Theme system: every rule below reads chrome colors (backgrounds,
+     borders, body text, the blue accent) from these custom properties,
+     never a literal hex — that's what makes swapping [data-theme] on
+     <html> repaint the whole page. Deliberately NOT themed: colors that
+     carry meaning rather than decoration — redact/danger red, crop/
+     success green, the amber rect/circle drag-preview, the violet
+     shape-tool "armed" state, and above all #ff3b30 on .annotation/
+     .annotation-badge, which must stay pixel-identical to
+     capture.DefaultAnnotationColor (Go) since it's real annotation
+     data, not UI chrome. Palettes are standard, recognizable dev-editor
+     themes (Tokyo Night, Gruvbox dark, GitHub dark) rather than
+     invented colors, so anyone who already uses one recognizes it here. */
+  :root {
+    color-scheme: dark;
+    --bg: #1a1a1e; --surface: #232328; --surface-2: #2a2a30; --surface-2-hover: #3a3a42;
+    --surface-inset: #17171a; --border: #444; --border-soft: #333;
+    --text: #f0f0f0; --text-soft: #ccc; --text-muted: #999;
+    --accent: #8ab4ff; --accent-bg: #2a4a6a; --accent-border: #3c6ca0; --code-bg: #26262b;
+  }
+  html[data-theme="tokyo-night"] {
+    --bg: #1a1b26; --surface: #24283b; --surface-2: #292e42; --surface-2-hover: #343b58;
+    --surface-inset: #16161e; --border: #3b4261; --border-soft: #2a2e42;
+    --text: #c0caf5; --text-soft: #a9b1d6; --text-muted: #565f89;
+    --accent: #7aa2f7; --accent-bg: #2c3453; --accent-border: #3d59a1; --code-bg: #1f2335;
+  }
+  html[data-theme="gruvbox"] {
+    --bg: #282828; --surface: #3c3836; --surface-2: #504945; --surface-2-hover: #665c54;
+    --surface-inset: #1d2021; --border: #504945; --border-soft: #3c3836;
+    --text: #ebdbb2; --text-soft: #d5c4a1; --text-muted: #a89984;
+    --accent: #83a598; --accent-bg: #3c4b48; --accent-border: #5a7d75; --code-bg: #32302f;
+  }
+  html[data-theme="github-dark"] {
+    --bg: #0d1117; --surface: #161b22; --surface-2: #21262d; --surface-2-hover: #30363d;
+    --surface-inset: #010409; --border: #30363d; --border-soft: #21262d;
+    --text: #c9d1d9; --text-soft: #adbac7; --text-muted: #8b949e;
+    --accent: #58a6ff; --accent-bg: #1c3a5e; --accent-border: #1f6feb; --code-bg: #161b22;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a1e; color: #f0f0f0; max-width: 900px; margin-inline: auto; }
+  body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); max-width: 900px; margin-inline: auto; }
   h1 { margin-bottom: 0.25rem; }
-  .hint { color: #999; margin-top: 0; margin-bottom: 0.75rem; }
-  .export-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 2rem; }
-  .export-btn { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.45rem 0.9rem; cursor: pointer; font-size: 0.85rem; }
-  .export-btn:hover { background: #3a3a42; }
+  .hint { color: var(--text-muted); margin-top: 0; margin-bottom: 0.75rem; }
+  .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+  /* Icon-only theme switcher: a native <select> (free keyboard nav and
+     a real OS-native dropdown menu) with its own text hidden and a
+     palette icon painted on top instead — pointer-events:none on the
+     icon so clicks still land on the select underneath it. */
+  .theme-picker { position: relative; flex-shrink: 0; }
+  .theme-picker select { appearance: none; -webkit-appearance: none; width: 2.2rem; height: 2.2rem; background: var(--surface-2); color: transparent; text-indent: -9999px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+  .theme-picker select:hover { background: var(--surface-2-hover); }
+  .theme-picker svg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; color: var(--text); }
+  .export-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-bottom: 2rem; }
+  .export-btn { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.45rem 0.9rem; cursor: pointer; font-size: 0.85rem; }
+  .export-btn:hover { background: var(--surface-2-hover); }
   .export-btn:disabled { opacity: 0.5; cursor: default; }
   .export-hint { color: #7ee787; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; }
   .export-hint.show { opacity: 1; }
   .export-hint.error { color: #ff6b6b; }
-  .step { background: #232328; border: 1px solid #333; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .step { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
   .step.hidden-step { opacity: 0.45; }
-  .step-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
-  .step-header h2 { font-size: 1.1rem; margin: 0; color: #8ab4ff; flex: 1; }
-  .step-header button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
-  .step-header button:hover { background: #3a3a42; }
+  .step-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .step-header h2 { font-size: 1.1rem; margin: 0; color: var(--accent); flex: 1; }
+  .step-header button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.85rem; }
+  .step-header button:hover { background: var(--surface-2-hover); }
   .step-header button:disabled { opacity: 0.3; cursor: default; }
-  .step-header select.header-style-select { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.5rem; cursor: pointer; font-size: 0.8rem; font-family: inherit; }
-  .step-header select.header-style-select:hover { background: #3a3a42; }
-  textarea { width: 100%; min-height: 3rem; background: #17171a; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.5rem; font-family: inherit; font-size: 0.95rem; resize: vertical; }
-  .save-row { display: flex; justify-content: flex-end; margin-top: 0.4rem; gap: 0.5rem; align-items: center; }
+  .step-header select.header-style-select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.3rem 0.5rem; cursor: pointer; font-size: 0.8rem; font-family: inherit; }
+  .step-header select.header-style-select:hover { background: var(--surface-2-hover); }
+  textarea { width: 100%; min-height: 3rem; background: var(--surface-inset); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; font-family: inherit; font-size: 0.95rem; resize: vertical; }
+  .save-row { display: flex; flex-wrap: wrap; justify-content: flex-end; margin-top: 0.4rem; gap: 0.5rem; align-items: center; }
   .save-row button { background: #2a5a3a; color: #f0f0f0; border: 1px solid #3a7a4a; border-radius: 4px; padding: 0.4rem 0.9rem; cursor: pointer; }
   .save-row button:hover { background: #366e46; }
-  .save-row button.active { background: #2a4a6a; border-color: #3c6ca0; }
+  .save-row button.active { background: var(--accent-bg); border-color: var(--accent-border); }
   .saved-hint { color: #7ee787; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; }
   .saved-hint.show { opacity: 1; }
   /* Markdown preview panel (decision #32) — same dark card look as the
@@ -64,23 +131,23 @@ const editorCSS = `
      own .note rules so what you see here is a reasonable preview of
      what the actual export will look like, not just "some rendered
      HTML." */
-  .md-preview { margin-top: 0.5rem; padding: 0.75rem 1rem; background: #17171a; border: 1px solid #333; border-radius: 4px; font-size: 0.95rem; }
+  .md-preview { margin-top: 0.5rem; padding: 0.75rem 1rem; background: var(--surface-inset); border: 1px solid var(--border-soft); border-radius: 4px; font-size: 0.95rem; }
   .md-preview p { margin: 0 0 0.6em; }
   .md-preview p:last-child { margin-bottom: 0; }
-  .md-preview code { background: #26262b; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.92em; }
-  .md-preview a { color: #8ab4ff; }
+  .md-preview code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.92em; }
+  .md-preview a { color: var(--accent); }
   .md-preview ul, .md-preview ol { margin: 0 0 0.6em; padding-left: 1.4em; }
   .md-preview img { margin: 0.4em 0; }
-  .md-preview h1, .md-preview h2, .md-preview h3 { margin: 0.6em 0 0.4em; color: #8ab4ff; }
-  .md-preview-empty { color: #777; font-style: italic; margin: 0; }
+  .md-preview h1, .md-preview h2, .md-preview h3 { margin: 0.6em 0 0.4em; color: var(--accent); }
+  .md-preview-empty { color: var(--text-muted); font-style: italic; margin: 0; }
   .md-preview .video-embed { position: relative; width: 100%; max-width: 480px; margin: 0.6em 0; padding-top: 56.25%; }
   .md-preview .video-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 6px; }
   img { max-width: 100%; border-radius: 4px; display: block; }
-  pre { background: #17171a; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; margin: 0.4rem 0; }
+  pre { background: var(--surface-inset); padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; margin: 0.4rem 0; }
   pre.cmd { color: #7ee787; }
   .img-wrap { margin-top: 0.5rem; }
   .img-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
-  .img-toolbar button { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; }
+  .img-toolbar button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; }
   .img-toolbar button:disabled { opacity: 0.35; cursor: default; }
   /* Icon-only tool buttons (decision #32) — a fixed square so the
      toolbar reads as one tidy row of controls rather than the ragged
@@ -97,9 +164,17 @@ const editorCSS = `
   .img-toolbar button.armed.shape-btn { background: #3a2a6a; border-color: #5c4c9c; }
   .freehand-preview { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; pointer-events: none; z-index: 2; overflow: visible; }
   .img-toolbar button.apply-btn { background: #2a5a3a; border-color: #3a7a4a; }
-  .img-toolbar button.style-selected { background: #2a4a6a; border-color: #3c6ca0; }
-  .img-toolbar .sep { width: 1px; height: 1.2rem; background: #444; margin: 0 0.2rem; }
-  .mode-hint { color: #999; font-size: 0.8rem; }
+  .img-toolbar button.style-selected { background: var(--accent-bg); border-color: var(--accent-border); }
+  /* Boxes a related set of tool buttons together (see toolGroup() in
+     editorJS) — a visible container instead of a bare 1px divider line,
+     so which buttons belong together is obvious without reading titles.
+     nowrap: a group's own buttons never break onto two lines; it's the
+     toolbar as a whole (flex-wrap below) that puts whole groups onto
+     new rows on a narrow screen. */
+  .tool-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 0.3rem; background: var(--surface-inset); border: 1px solid var(--border-soft); border-radius: 6px; padding: 0.25rem; }
+  .labeled-btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .labeled-btn svg { display: block; flex-shrink: 0; }
+  .mode-hint { color: var(--text-muted); font-size: 0.8rem; }
   /* inline-block, not block, so this shrink-wraps to the <img>'s actual
      rendered box instead of stretching to the wrapper's full width —
      annotation positions are percentages of this frame, so the frame's
@@ -124,7 +199,7 @@ const editorCSS = `
      deliberately sits a few px outside the annotation's own box. */
   .crop-mask { position: absolute; display: none; background: rgba(0, 0, 0, 0.65); pointer-events: none; z-index: 2; }
   .crop-boundary { position: absolute; display: none; border: 2px dashed #7ee787; box-sizing: border-box; pointer-events: none; z-index: 3; }
-  .resize-handle { position: absolute; width: 10px; height: 10px; margin: -5px; background: #fff; border: 1px solid #333; border-radius: 2px; z-index: 2; }
+  .resize-handle { position: absolute; width: 10px; height: 10px; margin: -5px; background: #fff; border: 1px solid var(--border-soft); border-radius: 2px; z-index: 2; }
   .handle-nw, .handle-se { cursor: nwse-resize; }
   .handle-ne, .handle-sw { cursor: nesw-resize; }
   .annotation { position: absolute; border: 3px solid #ff3b30; box-sizing: border-box; cursor: move; z-index: 3; }
@@ -147,7 +222,7 @@ const editorCSS = `
   .annotation-toolbar {
     position: absolute; left: 50%; top: 0; transform: translate(-50%, calc(-100% - 10px));
     display: none; align-items: center; gap: 3px;
-    background: #2a2a30; border: 1px solid #444; border-radius: 6px; padding: 3px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 3px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.4); z-index: 5; white-space: nowrap;
   }
   .annotation:hover .annotation-toolbar, .annotation.pinned .annotation-toolbar { display: flex; }
@@ -155,45 +230,45 @@ const editorCSS = `
      clipped off the top of the frame — flipped below instead (JS adds
      this class based on the annotation's vertical position). */
   .annotation.toolbar-below .annotation-toolbar { top: 100%; transform: translate(-50%, 10px); }
-  .annotation-toolbar input[type=number] { width: 2.8rem; background: #17171a; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.15rem 0.3rem; font-size: 0.75rem; font-family: inherit; }
+  .annotation-toolbar input[type=number] { width: 2.8rem; background: var(--surface-inset); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.3rem; font-size: 0.75rem; font-family: inherit; }
   .annotation-toolbar input::-webkit-inner-spin-button, .annotation-toolbar input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  .annotation-toolbar input.annotation-color-input { -webkit-appearance: none; appearance: none; width: 22px; height: 22px; padding: 0; border: 1px solid #444; border-radius: 4px; cursor: pointer; background: none; }
+  .annotation-toolbar input.annotation-color-input { -webkit-appearance: none; appearance: none; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: none; }
   .annotation-toolbar input.annotation-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
   .annotation-toolbar input.annotation-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
-  .annotation-toolbar button { background: #333338; color: #f0f0f0; border: 1px solid #4a4a50; border-radius: 4px; width: 22px; height: 22px; font-size: 0.75rem; line-height: 1; cursor: pointer; padding: 0; }
-  .annotation-toolbar button:hover { background: #45454c; }
+  .annotation-toolbar button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; width: 22px; height: 22px; font-size: 0.75rem; line-height: 1; cursor: pointer; padding: 0; }
+  .annotation-toolbar button:hover { background: var(--surface-2-hover); }
   .annotation-toolbar button:disabled { opacity: 0.3; cursor: default; }
   .annotation-toolbar button.annotation-delete-btn:hover { background: #7a2a2a; border-color: #a03c3c; }
   /* The "#" toggle button's pressed-looking state when this shape
      currently shows a numbered badge — shapes default to OFF (decision
      #30), so this is the one control that visibly says "this shape is
      part of the numbered sequence" at a glance. */
-  .annotation-toolbar button.annotate-toggle.active { background: #2a4a6a; border-color: #3c6ca0; }
-  .annotation-toolbar .toolbar-sep { width: 1px; height: 16px; background: #444; margin: 0 1px; }
+  .annotation-toolbar button.annotate-toggle.active { background: var(--accent-bg); border-color: var(--accent-border); }
+  .annotation-toolbar .toolbar-sep { width: 1px; height: 16px; background: var(--border); margin: 0 1px; }
   .step-title { display: flex; align-items: center; gap: 0.4rem; flex: 1; }
   .step-title h2 { cursor: text; }
   .step-title h2:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
-  .step-title input { font-size: 1.1rem; font-weight: 600; color: #8ab4ff; background: #17171a; border: 1px solid #444; border-radius: 4px; padding: 0.15rem 0.4rem; font-family: inherit; flex: 1; min-width: 0; }
+  .step-title input { font-size: 1.1rem; font-weight: 600; color: var(--accent); background: var(--surface-inset); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.4rem; font-family: inherit; flex: 1; min-width: 0; }
   .window-line { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; margin-bottom: 0.5rem; }
-  .window-line span { cursor: text; color: #8ab4ff; font-weight: 600; }
+  .window-line span { cursor: text; color: var(--accent); font-weight: 600; }
   .window-line span:hover { text-decoration: underline dotted; text-underline-offset: 2px; }
-  .window-line input { font-size: 0.9rem; background: #17171a; border: 1px solid #444; border-radius: 4px; padding: 0.1rem 0.35rem; font-family: inherit; }
+  .window-line input { font-size: 0.9rem; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 4px; padding: 0.1rem 0.35rem; font-family: inherit; }
   /* App and window-title fields deliberately don't look like clones of
      each other: same visual split as the display-mode text (bold/blue
      app, plain/gray title), a dash between them so it reads as one
      "App — Title" line being edited, and different widths since they're
      conceptually different-length fields. */
-  .window-line input.window-app-input { font-weight: 600; color: #8ab4ff; width: 8rem; }
-  .window-line input.window-title-input { font-weight: normal; color: #ccc; flex: 1; min-width: 0; }
-  .window-line-sep { color: #666; }
+  .window-line input.window-app-input { font-weight: 600; color: var(--accent); width: 8rem; }
+  .window-line input.window-title-input { font-weight: normal; color: var(--text-soft); flex: 1; min-width: 0; }
+  .window-line-sep { color: var(--text-muted); }
   /* A content step (decision #29) is visually distinguished only by a
      subtle left accent — same card shape as every other step, since
      it's still a first-class step (reorderable, hideable), just one
      that was authored instead of captured. */
-  .step.content-step { border-left: 3px solid #8ab4ff; }
+  .step.content-step { border-left: 3px solid var(--accent); }
   .insert-step-row { display: flex; justify-content: center; margin: -0.4rem 0 0.6rem; }
-  .insert-step-btn { background: transparent; border: 1px dashed #444; color: #777; border-radius: 4px; padding: 0.15rem 0.6rem; font-size: 0.75rem; cursor: pointer; }
-  .insert-step-btn:hover { border-color: #8ab4ff; color: #8ab4ff; }
+  .insert-step-btn { background: transparent; border: 1px dashed var(--border); color: var(--text-muted); border-radius: 4px; padding: 0.15rem 0.6rem; font-size: 0.75rem; cursor: pointer; }
+  .insert-step-btn:hover { border-color: var(--accent); color: var(--accent); }
   /* Focused/"modal" view for an image editor — see the openFocusView
      comment in editorJS for why this reparents the existing imgWrap
      rather than building a second editor. Fixed positioning means this
@@ -203,15 +278,33 @@ const editorCSS = `
      than one squeezed into a narrow reading column. */
   .editor-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 100; align-items: center; justify-content: center; padding: 2rem; }
   .editor-modal-overlay.open { display: flex; }
-  .editor-modal { position: relative; background: #1a1a1e; border: 1px solid #333; border-radius: 8px; padding: 1rem; max-width: 96vw; max-height: 92vh; overflow: auto; }
-  .editor-modal-close { position: absolute; top: 0.6rem; right: 0.6rem; background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.35rem 0.7rem; cursor: pointer; font-size: 0.85rem; }
-  .editor-modal-close:hover { background: #3a3a42; }
-  .editor-modal-label { color: #8ab4ff; font-weight: 600; margin: 0 3.5rem 0.75rem 0; font-size: 1rem; }
+  .editor-modal { position: relative; background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px; padding: 1rem; max-width: 96vw; max-height: 92vh; overflow: auto; }
+  .editor-modal-close { position: absolute; top: 0.6rem; right: 0.6rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.35rem 0.7rem; cursor: pointer; font-size: 0.85rem; }
+  .editor-modal-close:hover { background: var(--surface-2-hover); }
+  .editor-modal-label { color: var(--accent); font-weight: 600; margin: 0 3.5rem 0.75rem 0; font-size: 1rem; }
   .editor-modal-body .img-frame img { max-height: 76vh; width: auto; max-width: 88vw; }
   .editor-modal-body .expand-btn { display: none; }
   body.modal-open { overflow: hidden; }
-  .expand-btn { position: absolute; top: 8px; right: 8px; z-index: 6; background: rgba(20,20,24,0.75); color: #f0f0f0; border: 1px solid #555; border-radius: 4px; width: 26px; height: 26px; font-size: 0.9rem; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .expand-btn { position: absolute; top: 8px; right: 8px; z-index: 6; background: rgba(20,20,24,0.75); color: var(--text); border: 1px solid #555; border-radius: 4px; width: 26px; height: 26px; font-size: 0.9rem; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   .expand-btn:hover { background: rgba(40,40,48,0.9); }
+
+  /* Narrow viewports (phones, split-screen tablets) — the 900px reading
+     column and 2rem page padding are fine on desktop but eat too much
+     of a ~375-430px phone screen; everything below already wraps via
+     flex-wrap, this just tightens spacing so wrapped rows aren't
+     fighting oversized gutters too. */
+  @media (max-width: 640px) {
+    body { padding: 1rem; }
+    h1 { font-size: 1.4rem; }
+    .step { padding: 0.85rem 0.9rem; }
+    .step-header h2 { font-size: 1rem; }
+    .export-row, .save-row, .img-toolbar { gap: 0.4rem; }
+    .editor-modal-overlay { padding: 0.75rem; }
+    /* Preview / Insert Image / Save caption: icon only, no label text —
+       title/aria-label still carry the accessible name regardless. */
+    .labeled-btn .btn-label { display: none; }
+    .labeled-btn { padding: 0.45rem; }
+  }
 `
 
 const editorJS = `
@@ -355,8 +448,8 @@ const editorJS = `
       header.className = 'step-header';
       header.appendChild(buildStepTitle(step, displayPos));
 
-      var upBtn = mkBtn('↑', pos === 0, function() { moveStep(pos, -1); });
-      var downBtn = mkBtn('↓', pos === order.length - 1, function() { moveStep(pos, 1); });
+      var upBtn = mkBtn('↑', pos === 0, function() { moveStep(pos, -1); }, 'Move step up');
+      var downBtn = mkBtn('↓', pos === order.length - 1, function() { moveStep(pos, 1); }, 'Move step down');
       var hideBtn = mkBtn(isHidden(idx) ? 'Show' : 'Hide', false, function() { toggleHidden(idx); });
       header.appendChild(upBtn);
       header.appendChild(downBtn);
@@ -403,8 +496,7 @@ const editorJS = `
         var savedHint = document.createElement('span');
         savedHint.className = 'saved-hint';
         savedHint.textContent = 'Saved';
-        var saveBtn = document.createElement('button');
-        saveBtn.textContent = 'Save caption';
+        var saveBtn = mkLabeledBtn('check', 'Save caption');
         saveBtn.onclick = function() {
           api('POST', '/api/caption', {index: step.index, note: ta.value}).then(function() {
             savedHint.classList.add('show');
@@ -449,9 +541,8 @@ const editorJS = `
     panel.className = 'md-preview';
     panel.style.display = 'none';
 
-    var toggleBtn = document.createElement('button');
-    toggleBtn.type = 'button';
-    toggleBtn.textContent = 'Preview';
+    var toggleBtn = mkLabeledBtn('eye', 'Preview');
+    var toggleLabel = toggleBtn.querySelector('.btn-label');
 
     var visible = false;
     var debounceTimer = null;
@@ -468,7 +559,10 @@ const editorJS = `
       visible = !visible;
       panel.style.display = visible ? 'block' : 'none';
       toggleBtn.classList.toggle('active', visible);
-      toggleBtn.textContent = visible ? 'Hide Preview' : 'Preview';
+      var label = visible ? 'Hide Preview' : 'Preview';
+      toggleLabel.textContent = label;
+      toggleBtn.title = label;
+      toggleBtn.setAttribute('aria-label', label);
       if (visible) renderNow();
     });
 
@@ -514,9 +608,7 @@ const editorJS = `
   // step's actual Note text until the user clicks Save.
   function buildInsertImageControl(ta) {
     var wrap = document.createElement('span');
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = 'Insert Image';
+    var btn = mkLabeledBtn('image', 'Insert Image');
     var fileInput = document.createElement('input');
     fileInput.type = 'file';
     fileInput.accept = 'image/png,image/jpeg';
@@ -551,11 +643,19 @@ const editorJS = `
     return wrap;
   }
 
-  function mkBtn(label, disabled, onclick) {
+  // ariaLabel is only needed for symbol-only buttons (e.g. '↑') — a
+  // screen reader's accessible-name computation prefers a button's own
+  // text content over its title attribute, so a bare arrow glyph would
+  // otherwise get announced literally instead of something meaningful.
+  function mkBtn(label, disabled, onclick, ariaLabel) {
     var b = document.createElement('button');
     b.textContent = label;
     b.disabled = disabled;
     b.addEventListener('click', onclick);
+    if (ariaLabel) {
+      b.title = ariaLabel;
+      b.setAttribute('aria-label', ariaLabel);
+    }
     return b;
   }
 
@@ -798,10 +898,13 @@ const editorJS = `
     var toolbar = document.createElement('div');
     toolbar.className = 'img-toolbar';
     var redactBtn = mkIconBtn('redact', 'Draw Redaction', 'redact-btn');
+    // solid/blur are sub-choices of the redact tool specifically (which
+    // style the next redaction is drawn in), not peer tools of their
+    // own — grouping them in the same boxed .tool-group as Redact (and
+    // nowhere near the shape tools) is what actually says that, instead
+    // of three visually-identical buttons in a row leaving it to guess.
     var solidBtn = mkIconBtn('solid', 'Solid fill', 'style-selected');
     var blurBtn = mkIconBtn('blur', 'Blur');
-    var sepShapes = document.createElement('span');
-    sepShapes.className = 'sep';
     // The five shape tools (decision #30) — a persistent palette, not
     // one-shot toggles: arming one stays armed across multiple draws
     // (click it again, press Esc, or pick a different tool to stop),
@@ -818,19 +921,35 @@ const editorJS = `
     var freehandBtn = mkIconBtn('pen', 'Pen (freehand)', 'shape-btn');
     var cropBtn = mkIconBtn('crop', 'Draw Crop', 'crop-btn');
     var clearCropBtn = mkIconBtn('clearCrop', 'Clear Crop');
-    var sep1 = document.createElement('span');
-    sep1.className = 'sep';
     var applyBtn = mkPlainBtn('Apply', 'apply-btn');
     var cancelBtn = mkPlainBtn('Cancel');
-    var sep2 = document.createElement('span');
-    sep2.className = 'sep';
     var undoBtn = mkIconBtn('undo', 'Undo');
     var redoBtn = mkIconBtn('redo', 'Redo');
     var resetBtn = mkIconBtn('reset', 'Reset (discard all edits)');
     var modeHint = document.createElement('span');
     modeHint.className = 'mode-hint';
-    [redactBtn, solidBtn, blurBtn, sepShapes, rectBtn, circleBtn, lineBtn, arrowBtn, freehandBtn, cropBtn, clearCropBtn, sep1, applyBtn, cancelBtn, sep2, undoBtn, redoBtn, resetBtn, modeHint]
-      .forEach(function(elm) { toolbar.appendChild(elm); });
+
+    // toolGroup boxes a set of related buttons together (a shared
+    // background/border) so the grouping is visible at a glance instead
+    // of relying on plain 1px divider lines, which just read as random
+    // clutter next to whichever button happens to sit beside one. Each
+    // group is its own flex row (nowrap — five icon buttons is still
+    // under 200px, never wraps mid-group even on a phone), and the
+    // toolbar as a whole wraps GROUPS onto new lines on narrow screens.
+    function toolGroup(buttons) {
+      var g = document.createElement('div');
+      g.className = 'tool-group';
+      buttons.forEach(function(b) { g.appendChild(b); });
+      return g;
+    }
+    [
+      toolGroup([redactBtn, solidBtn, blurBtn]),
+      toolGroup([rectBtn, circleBtn, lineBtn, arrowBtn, freehandBtn]),
+      toolGroup([cropBtn, clearCropBtn]),
+      toolGroup([applyBtn, cancelBtn]),
+      toolGroup([undoBtn, redoBtn, resetBtn]),
+      modeHint,
+    ].forEach(function(elm) { toolbar.appendChild(elm); });
     imgWrap.appendChild(toolbar);
 
     var redactStyle = 'solid';
@@ -857,6 +976,7 @@ const editorJS = `
     var expandBtn = document.createElement('button');
     expandBtn.className = 'expand-btn';
     expandBtn.title = 'Open focused view';
+    expandBtn.setAttribute('aria-label', 'Open focused view');
     expandBtn.textContent = '⤢';
     expandBtn.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -1046,6 +1166,9 @@ const editorJS = `
     undo: '<path d="M9 14L4 9l5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h11a5 5 0 010 10h-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
     redo: '<path d="M15 14l5-5-5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9H9a5 5 0 000 10h3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
     reset: '<path d="M4 6h16M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2m3 0v13a2 2 0 01-2 2H8a2 2 0 01-2-2V6h12z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+    image: '<rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.5" cy="9.5" r="1.7" fill="currentColor"/><path d="M21 16l-6-6-4 4-3-3-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    check: '<path d="M4 12l5 5L20 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
   };
 
   // mkIconBtn builds an icon-only toolbar button — the icon is purely
@@ -1059,6 +1182,25 @@ const editorJS = `
     b.title = label;
     b.setAttribute('aria-label', label);
     b.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">' + TOOL_ICONS[iconKey] + '</svg>';
+    return b;
+  }
+
+  // mkLabeledBtn is mkIconBtn's opposite case: a button that normally
+  // shows an icon AND its text (Preview / Insert Image / Save caption
+  // aren't self-explanatory enough to go icon-only by default the way
+  // the image-editor toolbar's tools are). The narrow-viewport media
+  // query hides just the .btn-label span, not the button — title/
+  // aria-label are set explicitly either way, so the accessible name
+  // doesn't depend on which text happens to be visible at a given
+  // width.
+  function mkLabeledBtn(iconKey, label, cls) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'labeled-btn' + (cls ? ' ' + cls : '');
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' + TOOL_ICONS[iconKey] + '</svg><span class="btn-label"></span>';
+    b.querySelector('.btn-label').textContent = label;
     return b;
   }
 
@@ -1232,12 +1374,14 @@ const editorJS = `
     annotateBtn.className = 'annotate-toggle';
     annotateBtn.textContent = '#';
     annotateBtn.title = 'Toggle numbered annotation';
+    annotateBtn.setAttribute('aria-label', 'Toggle numbered annotation');
     toolbar.appendChild(annotateBtn);
 
     var numberInput = document.createElement('input');
     numberInput.type = 'number';
     numberInput.value = ann.number;
     numberInput.title = 'Renumber';
+    numberInput.setAttribute('aria-label', 'Renumber this annotation');
     toolbar.appendChild(numberInput);
 
     function renderAnnotatedState() {
@@ -1252,6 +1396,7 @@ const editorJS = `
     colorInput.className = 'annotation-color-input';
     colorInput.value = color();
     colorInput.title = 'Highlight color';
+    colorInput.setAttribute('aria-label', 'Highlight color');
     toolbar.appendChild(colorInput);
 
     var sep1 = document.createElement('span');
@@ -1261,10 +1406,12 @@ const editorJS = `
     var backBtn = document.createElement('button');
     backBtn.textContent = '‹';
     backBtn.title = 'Send backward';
+    backBtn.setAttribute('aria-label', 'Send annotation backward');
     backBtn.disabled = pos === 0;
     var frontBtn = document.createElement('button');
     frontBtn.textContent = '›';
     frontBtn.title = 'Bring forward';
+    frontBtn.setAttribute('aria-label', 'Bring annotation forward');
     frontBtn.disabled = pos === (step.annotations || []).length - 1;
     toolbar.appendChild(backBtn);
     toolbar.appendChild(frontBtn);
@@ -1277,6 +1424,7 @@ const editorJS = `
     delBtn.className = 'annotation-delete-btn';
     delBtn.textContent = '×';
     delBtn.title = 'Delete this annotation';
+    delBtn.setAttribute('aria-label', 'Delete this annotation');
     toolbar.appendChild(delBtn);
 
     el.appendChild(toolbar);
@@ -1830,6 +1978,17 @@ const editorJS = `
       }).catch(function(e) { alert(e.message || 'Nothing to reset.'); });
     });
   }
+
+  // Theme select — the actual <html data-theme> attribute is already
+  // set by the inline script in <head> (before first paint, so there's
+  // no flash of the wrong theme); this just syncs the dropdown's shown
+  // value to whatever that ended up being and persists future changes.
+  var themeSelect = document.getElementById('themeSelect');
+  themeSelect.value = document.documentElement.dataset.theme || 'loomless';
+  themeSelect.addEventListener('change', function() {
+    document.documentElement.dataset.theme = themeSelect.value;
+    try { localStorage.setItem('loomless-editor-theme', themeSelect.value); } catch (e) {}
+  });
 
   // Export buttons live in the static skeleton HTML, not the per-step
   // render() loop, so they're wired once here rather than re-bound on

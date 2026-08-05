@@ -2750,6 +2750,95 @@ and clicked all three export buttons in turn — each one showed
 to actually exist on disk afterward (not just that the button click
 didn't error).
 
+## 40. Editor accessibility, responsiveness, and theming pass
+
+Decided 2026-08-05, driven by a batch of direct user feedback on the
+local editor: are toolbar icons properly labeled for accessibility, is
+the page responsive, and could it support some real dev-editor color
+themes with a toggle. Iterated further after the first pass, based on
+live screenshots the user reacted to directly (grouping was unclear,
+two unlabeled divider lines "what's that???", the theme control should
+be a corner icon, not an inline labeled dropdown).
+
+**Accessibility audit:** `mkIconBtn` already set both `title` and
+`aria-label` on every toolbar icon button, but a browser's accessible-
+name computation for a `<button>` prefers its own visible text content
+over `title` — so several buttons with a short symbol as their only
+content (`↑`/`↓` step-reorder, `⤢` expand, `#` annotate-toggle, `‹`/`›`
+reorder-annotation, `×` delete) were only ever announcing the raw
+symbol, not the intended label, because `aria-label` was missing on
+those specifically (`title` alone loses to text content in that
+priority order). Fixed all of them; `mkBtn` gained an optional
+`ariaLabel` parameter for exactly this case.
+
+**Responsive:** the page had no `<meta name="viewport">` tag at all —
+mobile browsers were rendering it at a virtual desktop-width viewport
+(~980px) and scaling the whole page down to fit, which is what "not
+responsive" actually looked like (everything present, just tiny and
+zoomed out) rather than broken layout per se. Adding the tag was the
+one fix that mattered; flex-wrap gaps on a few rows (export/save/step-
+header) and a `max-width:640px` media query trimming padding/font-size
+rode along. Verified at 768px, 375px, and 320px (smallest common phone
+width) with a JS check confirming `document.documentElement.scrollWidth
+<= window.innerWidth` (no horizontal overflow) at every size.
+
+**Small-screen refinements** (separate follow-up round): Preview /
+Insert Image / Save caption go icon-only below 640px via a new
+`mkLabeledBtn` helper (icon + `.btn-label` span, CSS hides just the
+span; `title`/`aria-label` are set unconditionally so the accessible
+name never depends on which text happens to be visible).
+
+**Toolbar grouping** (second follow-up, after the user flagged that
+"redaction is kept with the solid fill section which is not good" and
+"2 vertical lines beside the undo icon what's that"): replaced the
+bare 1px `.sep` divider lines with actual `.tool-group` boxes (a
+`toolGroup()` JS helper wraps each related set of buttons in its own
+bordered/backgrounded container). This both fixed the "what's that
+line" confusion (there's no line anymore, just a visible box) and made
+the redact-tool's solid/blur sub-choice legible as belonging to Redact
+specifically, since it's boxed together and visually separated from
+the shape tools rather than sitting in the same flat row as everything
+else. Five groups: Redact (+solid/blur), Shapes (rect/circle/line/
+arrow/freehand), Crop (+clear), Actions (apply/cancel), History (undo/
+redo/reset) — `.img-toolbar`'s own `flex-wrap` puts whole groups onto
+new lines on narrow screens with no forced-break hack needed, since a
+group never needs to break internally at any supported width.
+
+**Themes:** four via CSS custom properties on `html[data-theme]` —
+Loomless Dark (default, the original palette, now just named),
+Tokyo Night, Gruvbox, GitHub Dark — chosen as recognizable, widely-used
+dev-editor palettes rather than invented colors. Only *chrome* colors
+(backgrounds, borders, body text, the blue accent) are themed;
+redact/danger red, crop/success green, the amber rect/circle drag-
+preview, and the violet shape-tool "armed" state stay literal across
+every theme, since they carry meaning (this control is dangerous /
+successful / in-progress), not brand decoration — and critically
+`#ff3b30` on `.annotation`/`.annotation-badge` was never touched, since
+it has to stay pixel-identical to `capture.DefaultAnnotationColor` (Go)
+as real annotation data, not chrome. An inline `<script>` in `<head>`
+(before `<style>`) sets `data-theme` from `localStorage` synchronously,
+before first paint, so switching themes and reloading never flashes
+the wrong one first.
+
+**Theme picker placement** (third follow-up, after the user asked for
+"minimal... a icon, on click dropdown comes"): moved from an inline
+labeled `<select>` in the page flow into a `.page-header` flex row
+(title left, picker right) as an icon-only control — a native
+`<select>` (keeping real keyboard nav and OS dropdown behavior for
+free) with its own text hidden (`color:transparent; text-indent:
+-9999px`) and a small palette SVG painted on top via `pointer-events:
+none` so clicks still reach the select underneath.
+
+**Verified:** `go build/vet/gofmt/test` clean throughout, Linux cross-
+compile clean. Every round live-verified in a real browser against a
+throwaway session — accessible names read via the accessibility tree
+(not just "the code sets aria-label"), all four themes switched and
+screenshotted individually including a page reload to confirm
+persistence with no flash, mobile/tablet/320px width screenshots for
+the responsive and icon-only-button changes, and a 250%-zoomed
+screenshot specifically to inspect the toolbar's boxed grouping closely
+enough to confirm the old divider lines were actually gone.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
