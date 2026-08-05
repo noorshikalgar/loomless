@@ -2718,6 +2718,38 @@ present with a valid, correctly-prefixed `data:image/svg+xml;base64,`
 href — not just that the Go code compiled, that the actual served page
 carries it.
 
+## 39. Export buttons in the local editor
+
+Decided 2026-08-05. The web editor could reorder/hide/caption/redact/
+annotate a session, but exporting still meant leaving it for the CLI
+(`loomless export <name> --format ...`) or the TUI. The user asked
+directly whether that could just live in the editor too — "it's easy
+there itself to edit and export in one go" — since the natural loop is
+edit until it looks right, then export, and there's no reason those two
+steps need two different surfaces.
+
+**Implementation:** `POST /api/export` (`internal/editor/editor.go`)
+takes `{"format": "md"|"pdf"|"slides"}` and calls the exact same
+`engine.ExportMarkdown`/`ExportPDF`/`ExportSlides` the CLI, TUI, and MCP
+server already call — no separate export code path to drift out of
+sync, no risk of the editor's export producing different output than
+`loomless export` would for the same session. Three buttons in the
+static page header (not per-step, since export is a whole-session
+action), disabled for the duration of the request to avoid a
+double-submit, with a status line showing the real returned file path
+on success or the error message on failure, auto-hiding after 4s —
+mirroring the existing `.saved-hint` pattern already used for caption
+saves rather than inventing a new feedback style.
+
+**Verified:** `go build/vet/gofmt/test` clean, no import cycle
+(`internal/editor` importing `internal/engine` — confirmed `engine`
+doesn't import `editor`). Live end-to-end in a real browser: built the
+binary, created a real session with a step, opened the running editor,
+and clicked all three export buttons in turn — each one showed
+"Exported to &lt;path&gt;" and the Markdown/PDF/HTML files were confirmed
+to actually exist on disk afterward (not just that the button click
+didn't error).
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

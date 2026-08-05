@@ -32,6 +32,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/noorshikalgar/loomless/internal/engine"
 	"github.com/noorshikalgar/loomless/internal/export"
 	"github.com/noorshikalgar/loomless/internal/session"
 )
@@ -216,6 +217,40 @@ func NewHandler(name string) (http.Handler, error) {
 		json.NewEncoder(w).Encode(struct {
 			HTML string `json:"html"`
 		}{rendered})
+	})
+	// /api/export lets the editor do the whole edit-then-export loop in
+	// one page — same engine.Export* functions the CLI/TUI/MCP already
+	// call, so the output is identical regardless of which surface
+	// triggered it.
+	mux.HandleFunc("POST /api/export", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Format string `json:"format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var path string
+		var err error
+		switch body.Format {
+		case "md", "markdown":
+			path, _, err = engine.ExportMarkdown(name)
+		case "pdf":
+			path, err = engine.ExportPDF(name)
+		case "slides":
+			path, err = engine.ExportSlides(name)
+		default:
+			http.Error(w, fmt.Sprintf("unknown format %q (want md, pdf, or slides)", body.Format), http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			Path string `json:"path"`
+		}{path})
 	})
 	mux.HandleFunc("POST /api/title", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

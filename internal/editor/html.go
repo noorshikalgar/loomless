@@ -10,7 +10,13 @@ func indexHTML(name string) string {
 <style>` + editorCSS + `</style>
 </head><body>
 <h1>` + html.EscapeString(name) + `</h1>
-<p class="hint">Reorder, hide, or edit captions, then export from the CLI/MCP as usual — changes are saved immediately.</p>
+<p class="hint">Reorder, hide, or edit captions — changes are saved immediately. Export whenever you're ready:</p>
+<div class="export-row">
+  <button class="export-btn" data-format="md">Export Markdown</button>
+  <button class="export-btn" data-format="pdf">Export PDF</button>
+  <button class="export-btn" data-format="slides">Export Slides</button>
+  <span class="export-hint" id="exportHint"></span>
+</div>
 <div id="steps"></div>
 <div class="editor-modal-overlay" id="editorModalOverlay">
   <div class="editor-modal">
@@ -29,7 +35,14 @@ const editorCSS = `
   * { box-sizing: border-box; }
   body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a1e; color: #f0f0f0; max-width: 900px; margin-inline: auto; }
   h1 { margin-bottom: 0.25rem; }
-  .hint { color: #999; margin-top: 0; margin-bottom: 2rem; }
+  .hint { color: #999; margin-top: 0; margin-bottom: 0.75rem; }
+  .export-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 2rem; }
+  .export-btn { background: #2a2a30; color: #f0f0f0; border: 1px solid #444; border-radius: 4px; padding: 0.45rem 0.9rem; cursor: pointer; font-size: 0.85rem; }
+  .export-btn:hover { background: #3a3a42; }
+  .export-btn:disabled { opacity: 0.5; cursor: default; }
+  .export-hint { color: #7ee787; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; }
+  .export-hint.show { opacity: 1; }
+  .export-hint.error { color: #ff6b6b; }
   .step { background: #232328; border: 1px solid #333; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
   .step.hidden-step { opacity: 0.45; }
   .step-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
@@ -1817,6 +1830,31 @@ const editorJS = `
       }).catch(function(e) { alert(e.message || 'Nothing to reset.'); });
     });
   }
+
+  // Export buttons live in the static skeleton HTML, not the per-step
+  // render() loop, so they're wired once here rather than re-bound on
+  // every re-render.
+  var exportHint = document.getElementById('exportHint');
+  var exportHintTimer = null;
+  document.querySelectorAll('.export-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var buttons = document.querySelectorAll('.export-btn');
+      buttons.forEach(function(b) { b.disabled = true; });
+      apiJSON('POST', '/api/export', {format: btn.dataset.format}).then(function(res) {
+        exportHint.textContent = 'Exported to ' + res.path;
+        exportHint.classList.remove('error');
+        exportHint.classList.add('show');
+      }).catch(function(e) {
+        exportHint.textContent = e.message || 'Export failed.';
+        exportHint.classList.add('error');
+        exportHint.classList.add('show');
+      }).finally(function() {
+        buttons.forEach(function(b) { b.disabled = false; });
+        clearTimeout(exportHintTimer);
+        exportHintTimer = setTimeout(function() { exportHint.classList.remove('show'); }, 4000);
+      });
+    });
+  });
 
   load();
 `
