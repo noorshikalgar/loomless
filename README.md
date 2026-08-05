@@ -39,6 +39,16 @@ Anthropic/OpenAI/Gemini/a local Ollama server — only when
 `LOOMLESS_LLM_PROVIDER` names one explicitly, see decisions #33/#34**).
 Not done: Windows, Wayland, sharing — all later phases.
 
+## Platform support
+
+| Platform | Status | Notes |
+|---|---|---|
+| **macOS** | ✅ Fully supported | The primary development platform — every feature (click capture, terminal capture, local editor, TUI, MCP server, auto-captions) is built and continuously exercised here. This is where bugs get caught first. |
+| **Linux (X11)** | ⚠️ Partial, less-tested | Window/terminal capture and export are implemented and were verified against a real X11 session (a container running Xvfb + fluxbox + `xdotool`/`wmctrl`/`xprop`/`maim`, not just cross-compiled — see decision #10), which caught and fixed two real bugs. Automatic click-capture isn't implemented (X11 needs the XTest/RECORD extension or privileged input access — see decision #10). The local editor and TUI have no platform-specific code but haven't been independently verified running on Linux the way capture has, so treat them as "should work," not "confirmed." **Wayland isn't supported at all** — every dependency here is an X11-protocol tool. |
+| **Windows** | ❌ Not supported | Currently **doesn't even build** on Windows (`internal/engine` uses a Unix-only field of `syscall.SysProcAttr` for detaching the click-daemon process) — nothing to do with the missing capture backend, which also doesn't exist yet. Not on the near-term roadmap; contributions welcome. |
+
+If you hit something that looks platform-specific, it's disproportionately likely to be a Linux or (theoretical, since it can't build yet) Windows issue rather than a macOS one — please file it with your OS and desktop environment.
+
 ## Why
 
 Explaining "what I did" today means choosing between a video (fast to
