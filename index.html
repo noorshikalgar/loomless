@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loomless — turn a working session into a readable story</title>
+<meta name="description" content="Loomless watches a dev session (clicks, terminal commands) and turns it into a structured, skimmable story — exported as Markdown, PDF, or a slide deck. Built for humans and AI coding agents alike.">
+<link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+<style>
+  :root {
+    --bg: #0a0a0c;
+    --surface: #131316;
+    --surface-2: #1a1a1e;
+    --border: #2a2a30;
+    --text: #f0f0f0;
+    --text-soft: #c9c9cf;
+    --text-muted: #8a8a92;
+    --amber: #FFB020;
+    --violet: #A855F7;
+    --red: #FF3B30;
+    --link: #8ab4ff;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-soft);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.55;
+  }
+  a { color: var(--link); }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 1.5rem; }
+
+  /* ---- nav ---- */
+  nav { position: sticky; top: 0; z-index: 10; background: rgba(10,10,12,0.85); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  nav .wrap { display: flex; align-items: center; justify-content: space-between; padding-block: 0.85rem; }
+  .brand { display: flex; align-items: center; gap: 0.55rem; color: var(--text); font-weight: 700; text-decoration: none; font-size: 1.05rem; }
+  .brand img { width: 28px; height: 28px; display: block; }
+  .nav-links { display: flex; gap: 1.4rem; align-items: center; }
+  .nav-links a { color: var(--text-muted); text-decoration: none; font-size: 0.9rem; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-links a.cta { color: var(--text); border: 1px solid var(--border); padding: 0.4rem 0.85rem; border-radius: 6px; }
+  .nav-links a.cta:hover { background: var(--surface-2); }
+
+  /* ---- hero ---- */
+  header.hero { padding: 5rem 0 4rem; text-align: center; }
+  header.hero img.icon { width: 88px; height: 88px; margin-bottom: 1.5rem; }
+  header.hero h1 { font-size: 2.6rem; color: var(--text); margin: 0 0 0.9rem; letter-spacing: -0.02em; }
+  header.hero p.tagline { font-size: 1.2rem; color: var(--text-muted); max-width: 640px; margin: 0 auto 2rem; }
+  .hero-ctas { display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1rem; }
+  .btn { display: inline-block; padding: 0.7rem 1.4rem; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 0.95rem; border: 1px solid transparent; }
+  .btn-primary { background: var(--text); color: #0a0a0c; }
+  .btn-primary:hover { background: #d8d8d8; }
+  .btn-secondary { border-color: var(--border); color: var(--text); }
+  .btn-secondary:hover { background: var(--surface-2); }
+  .hero-note { color: var(--text-muted); font-size: 0.85rem; }
+
+  section { padding: 4rem 0; border-top: 1px solid var(--border); }
+  section h2 { color: var(--text); font-size: 1.7rem; margin: 0 0 0.5rem; text-align: center; }
+  section p.section-sub { color: var(--text-muted); text-align: center; max-width: 560px; margin: 0 auto 2.5rem; }
+
+  /* ---- features ---- */
+  .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.1rem; }
+  .feature { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.4rem; }
+  .feature .dot { width: 10px; height: 10px; border-radius: 3px; margin-bottom: 0.9rem; }
+  .feature h3 { color: var(--text); font-size: 1.02rem; margin: 0 0 0.4rem; }
+  .feature p { margin: 0; font-size: 0.9rem; color: var(--text-muted); }
+
+  /* ---- how it works ---- */
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.2rem; counter-reset: step; }
+  .step-card { position: relative; background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; padding: 1.5rem 1.3rem 1.3rem; }
+  .step-card .num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; font-weight: 700; font-size: 0.9rem; margin-bottom: 0.9rem; color: #0a0a0c; }
+  .step-card h3 { color: var(--text); font-size: 1rem; margin: 0 0 0.4rem; }
+  .step-card p { margin: 0; font-size: 0.88rem; color: var(--text-muted); }
+  .step-card code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0.1em 0.4em; font-size: 0.82em; color: var(--text-soft); }
+
+  /* ---- guide ---- */
+  .guide-block { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .guide-block .bar { display: flex; gap: 0.4rem; padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); }
+  .guide-block .bar span { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+  pre.code { margin: 0; padding: 1.3rem 1.5rem; overflow-x: auto; font-size: 0.85rem; color: var(--text-soft); }
+  pre.code .c { color: var(--text-muted); }
+  pre.code .amber { color: var(--amber); }
+  .guide-note { font-size: 0.85rem; color: var(--text-muted); margin-top: 1rem; }
+
+  /* ---- platform table ---- */
+  table.platforms { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-size: 0.9rem; }
+  table.platforms th, table.platforms td { text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.platforms tr:last-child td { border-bottom: none; }
+  table.platforms th { color: var(--text-muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  table.platforms td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
+
+  footer { padding: 3rem 0; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
+  footer a { color: var(--text-muted); }
+  footer a:hover { color: var(--text); }
+  footer .foot-links { display: flex; gap: 1.2rem; justify-content: center; margin-bottom: 1rem; flex-wrap: wrap; }
+
+  @media (max-width: 640px) {
+    header.hero { padding: 3rem 0 2.5rem; }
+    header.hero h1 { font-size: 2rem; }
+    header.hero p.tagline { font-size: 1.05rem; }
+    section { padding: 2.75rem 0; }
+    .nav-links { gap: 0.9rem; }
+    .nav-links a.hide-mobile { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img src="assets/icon.svg" alt="">
+      Loomless
+    </a>
+    <div class="nav-links">
+      <a href="#features" class="hide-mobile">Features</a>
+      <a href="#how-it-works" class="hide-mobile">How it works</a>
+      <a href="#guide" class="hide-mobile">Guide</a>
+      <a class="cta" href="https://github.com/noorshikalgar/loomless">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <img class="icon" src="assets/icon.svg" alt="Loomless">
+    <h1>Turn a working session into a readable story.</h1>
+    <p class="tagline">Loomless watches you click through a feature, debug an issue, or run a demo — and turns it into an ordered, skimmable write-up with screenshots and captions. Not a video. Built for humans <strong>and</strong> AI coding agents.</p>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="#guide">Get started</a>
+      <a class="btn btn-secondary" href="https://github.com/noorshikalgar/loomless">View on GitHub</a>
+    </div>
+    <p class="hero-note">Free, open source (MIT), local-first — no accounts, nothing leaves your machine unless you turn on optional LLM caption polish.</p>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Everything a debugging session needs, captured automatically</h2>
+    <p class="section-sub">Each feature below is real and shipped — not a roadmap promise.</p>
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="dot" style="background: var(--amber)"></div>
+        <h3>Automatic click capture</h3>
+        <p>On macOS, <code>record start</code> watches your clicks with a listen-only event tap and captures a window-scoped screenshot per click — with an optional highlight ring around what you clicked.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--violet)"></div>
+        <h3>Terminal capture</h3>
+        <p><code>loomless run -- &lt;cmd&gt;</code> captures a command plus its live output as a step — the same way on Linux and macOS, no shell hook required.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--red)"></div>
+        <h3>Redact &amp; annotate</h3>
+        <p>Five shape tools (rectangle, circle, line, arrow, freehand) plus solid/blur redaction, numbered highlight callouts, cropping, and full undo/redo/reset history.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--amber)"></div>
+        <h3>Secret masking</h3>
+        <p>Notes, window titles, and command output are pattern-matched for API keys, tokens, and <code>password=</code>-style assignments, masked before anything touches disk.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--violet)"></div>
+        <h3>Markdown / PDF / Slides</h3>
+        <p>Export the same session three ways — a Markdown file for a PR, a PDF, or a self-contained HTML slide deck — rendered directly from session data, no headless browser involved.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--red)"></div>
+        <h3>Local web editor</h3>
+        <p>Reorder, hide, or caption steps, edit screenshots, live-preview Markdown, and export — all from one page, with four built-in color themes (Tokyo Night, Gruvbox, GitHub Dark, and the default).</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--amber)"></div>
+        <h3>Terminal dashboard (TUI)</h3>
+        <p>Browse every session, search, and jump into edit/export — all without leaving the terminal.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--violet)"></div>
+        <h3>Agent-driven capture (MCP)</h3>
+        <p><code>loomless mcp</code> runs an MCP server so an AI coding agent — Claude Code, for instance — can narrate its own work into the exact same story format a human would produce.</p>
+      </div>
+      <div class="feature">
+        <div class="dot" style="background: var(--red)"></div>
+        <h3>Auto-captions</h3>
+        <p>A local template grounded in the real UI element you clicked (macOS Accessibility API), with optional LLM rewrite via Anthropic, OpenAI, Gemini, or a local Ollama server — off by default.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how-it-works">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="section-sub">Four commands, start to finish.</p>
+    <div class="steps">
+      <div class="step-card">
+        <div class="num" style="background: var(--amber)">1</div>
+        <h3>Start recording</h3>
+        <p><code>loomless record start &lt;name&gt;</code> begins watching — clicks are captured automatically on macOS.</p>
+      </div>
+      <div class="step-card">
+        <div class="num" style="background: var(--violet)">2</div>
+        <h3>Work normally</h3>
+        <p>Click around, or add context explicitly with <code>loomless step</code> / <code>loomless run</code>.</p>
+      </div>
+      <div class="step-card">
+        <div class="num" style="background: var(--red)">3</div>
+        <h3>Edit</h3>
+        <p><code>loomless edit &lt;name&gt;</code> opens the local web editor — reorder, redact, annotate, caption.</p>
+      </div>
+      <div class="step-card">
+        <div class="num" style="background: var(--amber)">4</div>
+        <h3>Export</h3>
+        <p><code>loomless export &lt;name&gt;</code> — Markdown, PDF, or Slides, right from the editor or the CLI.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="guide">
+  <div class="wrap">
+    <h2>Try it</h2>
+    <p class="section-sub">The whole core loop, copy-pasteable.</p>
+    <div class="guide-block">
+      <div class="bar"><span></span><span></span><span></span></div>
+      <pre class="code"><span class="c"># build</span>
+go build -o loomless ./cmd/loomless
+
+<span class="c"># record</span>
+./loomless record start my-first-story        <span class="c"># add --highlight for a click ring</span>
+./loomless step <span class="amber">"optional note, no click needed"</span>
+./loomless run -- go test ./...               <span class="c"># captures the command + output</span>
+./loomless record stop
+
+<span class="c"># edit, then export</span>
+./loomless edit my-first-story                <span class="c"># reorder / redact / annotate / caption</span>
+./loomless export my-first-story              <span class="c"># Markdown (default)</span>
+./loomless export my-first-story --format pdf
+./loomless export my-first-story --format slides</pre>
+    </div>
+    <p class="guide-note">Full install steps, exactly why each macOS permission is needed, and what happens if you skip it: see <a href="https://github.com/noorshikalgar/loomless/blob/main/INSTALL.md">INSTALL.md</a>.</p>
+  </div>
+</section>
+
+<section id="platforms">
+  <div class="wrap">
+    <h2>Platform support</h2>
+    <p class="section-sub">Know what to expect before you hit a surprise.</p>
+    <table class="platforms">
+      <tr><th>Platform</th><th>Status</th></tr>
+      <tr><td>macOS</td><td>Fully supported — the primary development platform, every feature is built and exercised here.</td></tr>
+      <tr><td>Linux (X11)</td><td>Window/terminal capture and export verified against a real X11 session. Automatic click-capture isn't implemented; Wayland isn't supported.</td></tr>
+      <tr><td>Windows</td><td>Not supported yet — doesn't currently build. Not on the near-term roadmap.</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/noorshikalgar/loomless">GitHub</a>
+      <a href="https://github.com/noorshikalgar/loomless/blob/main/INSTALL.md">Install guide</a>
+      <a href="https://github.com/noorshikalgar/loomless/blob/main/docs/product/00-README.md">Product docs</a>
+      <a href="https://github.com/noorshikalgar/loomless/blob/main/LICENSE">MIT License</a>
+    </div>
+    <p>Loomless — turn a working session into a readable story, not a video.</p>
+  </div>
+</footer>
+
+</body>
+</html>

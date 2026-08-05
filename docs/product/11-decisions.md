@@ -2839,6 +2839,56 @@ the responsive and icon-only-button changes, and a 250%-zoomed
 screenshot specifically to inspect the toolbar's boxed grouping closely
 enough to confirm the old divider lines were actually gone.
 
+## 41. GitHub Pages landing page (root `index.html`, not `/docs`)
+
+Decided 2026-08-05. The user asked for a simple, clean marketing/landing
+page showcasing features and a how-to-use guide, hostable on GitHub
+Pages.
+
+**Root `index.html`, not `docs/`.** GitHub Pages only offers two deploy
+sources: the repo root or a `/docs` folder. `docs/` here is already the
+entire internal product-thinking write-up (`docs/product/*.md`) — Pages
+defaults to running Jekyll over its source folder, which would mean
+either fighting Jekyll to leave those files alone or risking it trying
+to process them into unintended pages. Root sidesteps the conflict
+entirely: `index.html` lives beside `README.md`/`go.mod`/etc. (a normal
+pattern for a project that's both a code repo and has a Pages site), and
+a `.nojekyll` file disables Jekyll processing altogether since this is a
+hand-written static page with no need for Jekyll's templating.
+
+**Self-contained, no build step.** One HTML file, inlined CSS, no JS
+framework, no external fonts/CDN — matches this project's own "no
+external dependencies beyond stdlib and a few CLI tools" philosophy, and
+means nothing to rebuild before a Pages deploy.
+
+**Visual identity matches `assets/icon.svg` deliberately** — same
+near-black background, the same amber/violet/red trio used for the
+icon's own annotation shapes (as small dots in the feature grid, step
+numbers, section markers), same dashed-border treatment on the "how it
+works" cards — so the icon feels like part of one considered brand
+rather than a logo bolted onto generic landing-page styling.
+
+**Content is only what's actually shipped** — every feature listed
+(click capture, terminal capture, redact/annotate, secret masking,
+three export formats, the local editor incl. its new themes, the TUI,
+MCP agent capture, auto-captions) is real and already in `main`, not a
+roadmap aspiration. The quickstart code block and platform-support
+table are pulled directly from `README.md`'s own "Try it" and platform
+sections so the two don't drift into contradicting each other.
+
+**Verified:** live-rendered in a real browser end to end (not just
+read as markup) — desktop 1200px, mobile 375px, and a horizontal-
+overflow check via `document.documentElement.scrollWidth <=
+window.innerWidth`. That check caught a real bug: the nav's mobile
+CSS selector was `.nav-links span.hide-mobile` but the actual elements
+being hidden were `<a>` tags with that class, so on a phone the full
+"Features / How it works / Guide / GitHub" nav was cramming into the
+header instead of collapsing to just "GitHub" — fixed by correcting
+the selector to `a.hide-mobile`, then re-verified. Also confirmed the
+wide quickstart code block scrolls horizontally within its own
+`overflow-x:auto` container rather than pushing the page wider, and
+checked the browser console for errors (none).
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
