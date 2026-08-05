@@ -2607,9 +2607,69 @@ first external clone/star/import than to migrate later.
    under `~/.loomless/sessions/<name>/` and exports correctly, then the
    throwaway session was deleted.
 
+## 37. INSTALL.md and PUBLISHING.md — and confirming permissions are already optional
+
+Decided 2026-08-05. Ahead of publishing, the user asked two related
+things: write real install docs that explain *why* each macOS permission
+is needed (anticipating the obvious dev reaction — "why does this thing
+want Accessibility?"), and see whether any permission could be made
+optional rather than required.
+
+**Dev/QA persona framing:** the person reading an install doc for a CLI
+that asks for Accessibility + Screen Recording is, correctly,
+suspicious by default — those are exactly the permissions malware asks
+for too. The right answer isn't a blanket "trust us," it's naming the
+specific mechanism each permission gates (a listen-only event tap; the
+`screencapture` tool) and being honest that both are already degradable,
+not hand-waved as "needed."
+
+**Investigation, not a code change:** every capture path already
+degrades gracefully without either permission —
+`engine.CaptureStep` (`loomless step`/`capture_step`) catches a failed
+`Frontmost()`/`Screenshot()` and still saves the step with just its note,
+turning the OS error into a `warning` string, never a hard `err`.
+`engine.StartRecording` does the same for the click daemon: a failed
+`startClickDaemon` becomes `watching=false` + a warning, not a failed
+`record start`. This was true before this session — it's exactly the
+"don't force things" pattern already used for click-highlight/annotation
+UI (decision #21 etc.). So there was nothing to change in code to "make
+permissions optional" — they already are; the actual gap was that
+nothing explained this clearly to a new user, which is what INSTALL.md
+fixes. `loomless run` (terminal capture) needs neither permission at
+all, which INSTALL.md calls out explicitly as the fully permission-free
+path.
+
+**New docs:**
+- [`INSTALL.md`](../../INSTALL.md): prerequisites, build steps, and a
+  permission-by-permission breakdown (what it's *for*, specifically;
+  what happens if you deny it; how to grant it) instead of the old
+  README's one-line "First run prompts for Accessibility and Screen
+  Recording."
+- [`PUBLISHING.md`](../../PUBLISHING.md): the steps to actually push
+  this repo to GitHub — repo creation, remote, push, optional repo-page
+  polish. Written as instructions for the user to run themselves
+  (per their explicit ask — repo creation stays their action, not
+  something this session executes), not a script this session runs.
+- README trimmed to short pointers at both, rather than duplicating
+  their content (avoids the two copies drifting apart later).
+
+**Verified:** read every call site that touches `capture.Frontmost`,
+`capture.Screenshot`, and `capture.RunClickHook` across `engine.go` and
+confirmed each failure path already returns a non-fatal warning, in the
+CLI, the MCP server (`StartRecordingOut.Warning`/`StepOut.Warning`), and
+the TUI (same `engine.StartRecording` call) alike — the claim "these
+permissions are optional" in the new docs is backed by reading the
+actual current code, not asserted from memory of what the feature was
+supposed to do.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits
 are landing on `main` per [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md).
-Create the actual `github.com` remote (public, once there's real code)
-when ready — `gh repo create` from an authenticated session.
+
+Updated 2026-08-05: the product identity is settled (decision #36,
+Loomless) and there's real code to publish. Creating the actual
+`github.com` remote and pushing is the user's own action, not something
+run from here — the exact steps (repo creation, remote, push, optional
+repo-page polish) are written up in
+[`../../PUBLISHING.md`](../../PUBLISHING.md) for whenever that happens.

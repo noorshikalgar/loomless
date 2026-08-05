@@ -110,11 +110,12 @@ hide anything from your *live* terminal — only from what gets saved.
 Review before sharing a story publicly.
 
 Output lands in `~/.loomless/sessions/my-first-story/`. First run prompts
-for **Accessibility** (to watch clicks and resolve window info) and
-**Screen Recording** (to take the screenshots) — System Settings → Privacy
-& Security, granted to whichever terminal app you're running it from. Both
-are one-time macOS system prompts, expected per
-[`docs/product/07-edge-cases.md`](docs/product/07-edge-cases.md).
+for **Accessibility** (window info + click-capture) and **Screen
+Recording** (screenshots) — both are optional (deny either and Loomless
+still works, just with less auto-filled in) and one-time macOS prompts,
+expected per [`docs/product/07-edge-cases.md`](docs/product/07-edge-cases.md).
+See [`INSTALL.md`](INSTALL.md) for exactly why each permission is needed
+and what happens if you skip it.
 
 ## Agent-driven capture (MCP)
 
@@ -137,6 +138,12 @@ claude mcp add loomless -- /path/to/loomless mcp
 Not yet open for external contributions — the product direction is still
 being decided (see open questions above). Once Phase 0 starts, see
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the branching model and PR process.
+
+## Installing / Publishing
+
+[`INSTALL.md`](INSTALL.md) — build steps and exactly why each macOS
+permission is needed (and what happens if you skip it).
+[`PUBLISHING.md`](PUBLISHING.md) — steps to push this repo to GitHub.
 
 ## License
 
