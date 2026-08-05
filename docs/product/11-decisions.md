@@ -2369,6 +2369,81 @@ most.
    buttons in a real app, check the resulting captions) before
    relying on this in practice.
 
+## 34. Multi-provider LLM caption polish (Anthropic/OpenAI/Gemini/Ollama)
+
+Decided 2026-08-04, directly prompted by "do we only support Anthropic,
+can't we have more options for llm" — a fair question, since decision
+#33 hard-coded a single provider into `polishCaptionAsync` with no seam
+for anything else. Scoped with the user first on two axes: *which*
+providers (landed on all three cloud options plus a local one, not just
+one more), and *how* a configured provider gets picked (landed on an
+explicit env var, not scanning for whichever key happens to be set).
+
+**`llmProvider` is a one-method interface** (`rephrase(caption string)
+(string, error)`) with four implementations —
+`anthropicProvider`/`openAIProvider`/`geminiProvider`/`ollamaProvider`
+— because the four providers agree on almost nothing at the wire
+level: Anthropic uses an `x-api-key` header, OpenAI uses `Authorization:
+Bearer`, Gemini's key travels as a `?key=` query parameter (Google's
+own documented convention, not something this file invented), and
+Ollama has no key at all. Response shapes differ just as much
+(`content[0].text` vs. `choices[0].message.content` vs.
+`candidates[0].content.parts[0].text` vs. a flat `{"response": "..."}`)
+— there was no honest shared HTTP helper to extract beyond the prompt
+text itself (`rewritePromptFor`, one function, reused by all four so a
+caption reads the same regardless of which backend answered it).
+
+**`STORY_LLM_PROVIDER` is required and explicit — no auto-detection by
+scanning for whichever API key happens to be present.** The tempting
+alternative (if `ANTHROPIC_API_KEY` is set, just use it) has a real
+failure mode: plenty of people already export `ANTHROPIC_API_KEY` for
+unrelated reasons (Claude Code itself, another tool, a shell profile
+default) with zero intention of Story spending it on caption rewrites.
+Silently picking that up isn't a convenience, it's Story quietly making
+an API call the user never asked it to make. Naming a provider that
+turns out to be missing its own required key (e.g.
+`STORY_LLM_PROVIDER=openai` with no `OPENAI_API_KEY`) is treated as a
+real error worth logging once — almost certainly a typo or a forgotten
+export, not a state worth silently tolerating the way "no
+`STORY_LLM_PROVIDER` at all" is.
+
+**Ollama is the one provider that needs no API key and sends nothing
+over the network by default** (`http://localhost:11434` unless
+`OLLAMA_HOST` says otherwise) — genuinely the closest fit to this
+project's local-first stance of anything in this feature: a user who'd
+rather run the rewrite through a model they've already pulled, with
+zero data ever leaving the machine and zero cost, gets exactly that,
+not a cloud call dressed up as optional.
+
+**Each cloud provider also honors a `*_BASE_URL` override**
+(`ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`/`GEMINI_BASE_URL`) — added for
+a real reason (pointing at a self-hosted or OpenAI-compatible gateway,
+which is common enough in practice) that happens to double as the only
+seam this file's own tests need to exercise all four providers against
+a local `httptest.Server` instead of spending real API credits or
+requiring real keys for CI.
+
+**Verified:**
+
+1. Unit tests: one request/response test per provider, each pinned to
+   that provider's own distinctive wire shape specifically (Anthropic's
+   `x-api-key` + API-version headers; OpenAI's `Bearer` auth +
+   `choices[].message.content`; Gemini's API key as a query parameter +
+   `candidates[].content.parts[].text`; Ollama's no-auth request + flat
+   `{"response": ...}`) — not just "some provider works," but that each
+   one's actual, different shape is handled correctly. `selectLLMProvider`
+   tested for: no env var → `(nil, nil)`; a real provider name with its
+   key missing → an error; an unrecognized provider name → an error;
+   and, for each of the four names, that the right concrete provider
+   type comes back with the right config, including Gemini's
+   `GOOGLE_API_KEY` fallback and Ollama's host-to-baseURL construction.
+   `polishCaptionAsync` re-verified end to end through the real
+   `selectLLMProvider` lookup (not a bypassed seam) via
+   `STORY_LLM_PROVIDER=anthropic` + `ANTHROPIC_BASE_URL` pointed at a
+   mock server, confirming the full chain from env-var selection through
+   to `session.EditNote` still works after the refactor.
+2. `go build/vet/gofmt` clean; cross-compiled clean for Linux.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

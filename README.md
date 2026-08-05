@@ -32,9 +32,10 @@ no headless-browser/CDN dependency**; local editor: **web UI, not
 TUI**; highlights: **numbered, editable annotations shared by the
 automatic click-ring and manual highlights, not baked into pixels —
 see decisions #14/#16/#18**; auto-captions: **local template by
-default, macOS Accessibility API grounding, optional LLM rewrite only
-if `ANTHROPIC_API_KEY` is set — see decision #33**). Not done: Windows,
-Wayland, sharing — all later phases.
+default, macOS Accessibility API grounding, optional LLM rewrite via
+Anthropic/OpenAI/Gemini/a local Ollama server — only when
+`STORY_LLM_PROVIDER` names one explicitly, see decisions #33/#34**).
+Not done: Windows, Wayland, sharing — all later phases.
 
 ## Why
 
