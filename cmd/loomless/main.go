@@ -20,6 +20,7 @@ import (
 	"syscall"
 
 	"github.com/noorshikalgar/loomless/internal/capture"
+	"github.com/noorshikalgar/loomless/internal/dashboard"
 	"github.com/noorshikalgar/loomless/internal/editor"
 	"github.com/noorshikalgar/loomless/internal/engine"
 	"github.com/noorshikalgar/loomless/internal/session"
@@ -47,6 +48,8 @@ func main() {
 		err = cmdEdit(os.Args[2:])
 	case "tui":
 		err = cmdTUI(os.Args[2:])
+	case "serve":
+		err = cmdServe(os.Args[2:])
 	case "mcp":
 		err = cmdMCP(os.Args[2:])
 	case "__click-daemon":
@@ -83,6 +86,7 @@ Usage:
   loomless export <name> [--format md|pdf|slides]   Render a session (default: md)
   loomless edit <name>             Open the local web editor (reorder/hide/caption)
   loomless tui                     Session dashboard — list, edit, export, all from the terminal
+  loomless serve                   Web dashboard — list, record, edit, export, all from the browser
   loomless mcp                     Run the MCP server (stdio) for agent-driven capture
 
 Session data lives under ~/.loomless/sessions/<name>/.`)
@@ -341,6 +345,41 @@ func cmdEdit(args []string) error {
 	}
 	url := fmt.Sprintf("http://%s/", ln.Addr().String())
 	fmt.Printf("Editor for %q running at %s (Ctrl+C to stop)\n", name, url)
+	openBrowser(url)
+
+	server := &http.Server{Handler: handler}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		server.Close()
+	}()
+
+	if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// cmdServe starts the browser-based dashboard (internal/dashboard) —
+// the no-CLI-required front door: record, edit, export, and rename
+// every session from one page, meant for someone who'd rather double-
+// click a launcher than type commands. Same 127.0.0.1-only, same
+// open-a-browser-and-serve-until-Ctrl+C shape as cmdEdit, since it's
+// solving the identical "local single-user tool" problem one level up
+// (every session, not just one).
+func cmdServe(args []string) error {
+	handler, err := dashboard.NewHandler()
+	if err != nil {
+		return err
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("start dashboard server: %w", err)
+	}
+	url := fmt.Sprintf("http://%s/", ln.Addr().String())
+	fmt.Printf("Loomless dashboard running at %s (Ctrl+C to stop)\n", url)
 	openBrowser(url)
 
 	server := &http.Server{Handler: handler}
