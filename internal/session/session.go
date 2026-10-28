@@ -517,7 +517,7 @@ func setCurrent(name string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, []byte(name), 0o644)
+	return writeFileAtomic(p, []byte(name))
 }
 
 func clearCurrent() error {
@@ -537,10 +537,92 @@ func save(dir string, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("encode session: %w", err)
 	}
-	if err := os.WriteFile(metaPath(dir), b, 0o644); err != nil {
+	if err := writeFileAtomic(metaPath(dir), b); err != nil {
 		return fmt.Errorf("write session: %w", err)
 	}
 	return nil
+}
+
+// writeFileAtomic writes data to a temp file in path's own directory and
+// renames it over path. A plain os.WriteFile truncates first and writes
+// second, so any concurrent reader — the dashboard listing sessions, the
+// editor loading one, the TUI refreshing — could catch a zero-length or
+// half-written session.json mid-write and fail to parse it ("unexpected
+// end of JSON input"). rename(2) within one directory is atomic: readers
+// see either the complete old file or the complete new one, never a mix.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// loadForUpdate is Load for read-modify-write callers: it takes the
+// session directory's cross-process lock (lockDir) BEFORE reading, so the
+// version being modified is guaranteed to still be the latest when it's
+// saved back. The returned unlock is always non-nil and safe to defer
+// immediately, even on error.
+func loadForUpdate(name string) (*Session, string, func(), error) {
+	noop := func() {}
+	dir, err := Dir(name)
+	if err != nil {
+		return nil, "", noop, err
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		// Most likely the session doesn't exist (no directory to put a
+		// lock file in) — let Load produce its normal, clearer error.
+		if _, _, lerr := Load(name); lerr != nil {
+			return nil, "", noop, lerr
+		}
+		return nil, "", noop, fmt.Errorf("lock session %q: %w", name, err)
+	}
+	s, dir, err := Load(name)
+	if err != nil {
+		unlock()
+		return nil, "", noop, err
+	}
+	return s, dir, unlock, nil
+}
+
+// StopNamed marks a session stopped under the session lock — the locked
+// replacement for callers that used to Load and then call (*Session).Stop
+// themselves, which left a window for a concurrent writer's change to be
+// overwritten by the stale copy.
+func StopNamed(name string) (*Session, error) {
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Stop(dir); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // AppendStep reloads a session by name from disk, appends one step, and
@@ -549,7 +631,8 @@ func save(dir string, s *Session) error {
 // append starts from the latest on-disk state rather than a stale
 // in-memory copy.
 func AppendStep(name, note, windowApp, windowTitle string, image []byte) (Step, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return Step{}, err
 	}
@@ -601,7 +684,8 @@ const (
 // from "loomless run -- <command>", and saves. Mirrors AppendStep's
 // reload-then-append pattern for the same concurrent-writer reason.
 func AppendTerminalStep(name, command string, output []byte, exitCode int) (Step, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return Step{}, err
 	}
@@ -740,7 +824,8 @@ func (s *Session) VisibleSteps() []Step {
 // step indices — partial or garbage input is rejected rather than
 // silently dropping steps from the story), logs the change, and saves.
 func ReorderSteps(name string, newOrder []int) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -785,7 +870,8 @@ func ReorderSteps(name string, newOrder []int) (*Session, error) {
 // session so the caller (the editor's /api/insert-step handler) can
 // tell the frontend which card to focus.
 func InsertContentStep(name string, position int) (*Session, int, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -826,7 +912,8 @@ func InsertContentStep(name string, position int) (*Session, int, error) {
 // SetStepHidden reloads the named session, marks a step hidden or
 // visible, logs the change, and saves.
 func SetStepHidden(name string, stepIndex int, hidden bool) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -874,7 +961,8 @@ func SetStepHidden(name string, stepIndex int, hidden bool) (*Session, error) {
 // containing a pasted secret as an originally-typed one), logs the old
 // and new values, and saves.
 func EditNote(name string, stepIndex int, newNote string) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -913,7 +1001,8 @@ func EditNote(name string, stepIndex int, newNote string) (*Session, error) {
 // is: a custom title is free-text a user typed, just as capable of
 // carrying a pasted secret as a caption.
 func EditTitle(name string, stepIndex int, newTitle string) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -950,7 +1039,8 @@ func EditTitle(name string, stepIndex int, newTitle string) (*Session, error) {
 // user wants to show in the finished story. Masked the same way
 // WindowTitle already is at capture time (see AddStep).
 func EditWindowInfo(name string, stepIndex int, app, windowTitle string) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -997,7 +1087,8 @@ func EditHeaderStyle(name string, stepIndex int, style string) (*Session, error)
 	if !validHeaderStyles[style] {
 		return nil, fmt.Errorf("invalid header style %q (want \"\", \"app\", \"title\", or \"hidden\")", style)
 	}
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1048,7 +1139,8 @@ func EditImage(name string, stepIndex int, style string, x, y, w, h float64) (*S
 		return nil, fmt.Errorf("rectangle must have positive width and height")
 	}
 
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1111,7 +1203,8 @@ func findStep(s *Session, stepIndex int) (*Step, error) {
 // to the client without making the client guess which entry in the
 // step's list is the new one.
 func AddAnnotation(name string, stepIndex int, shape AnnotationShape) (Annotation, *Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return Annotation{}, nil, err
 	}
@@ -1169,7 +1262,8 @@ func shapeKindOrDefault(kind string) string {
 // ("undo"/"redo"/"reset" — see LogEdit), the same way image undo/redo/
 // reset already do for pixel restores.
 func SetStepPresentation(name string, stepIndex int, anns []Annotation, crop *CropRect) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1193,7 +1287,8 @@ func SetStepPresentation(name string, stepIndex int, anns []Annotation, crop *Cr
 // step's existing annotation IDs; partial or garbage input is rejected
 // rather than silently dropping an annotation from the stack.
 func ReorderAnnotations(name string, stepIndex int, newOrder []int) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1250,7 +1345,8 @@ func ReorderAnnotations(name string, stepIndex int, newOrder []int) (*Session, e
 // recomputes X/Y/W/H from it via boundingBox, ignoring the given
 // X/Y/W/H, for the same reason AddAnnotation does.
 func UpdateAnnotation(name string, stepIndex, annotationID, number int, shape AnnotationShape) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1303,7 +1399,8 @@ func UpdateAnnotation(name string, stepIndex, annotationID, number int, shape An
 // underlying screenshot is untouched — annotations were never baked into
 // its pixels, so there's nothing to restore.
 func DeleteAnnotation(name string, stepIndex, annotationID int) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1341,7 +1438,8 @@ func SetCrop(name string, stepIndex int, x, y, w, h float64) (*Session, error) {
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("crop rectangle must have positive width and height")
 	}
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1367,7 +1465,8 @@ func SetCrop(name string, stepIndex int, x, y, w, h float64) (*Session, error) {
 // (not an error) if the step had no crop set — clearing an already-clear
 // crop isn't a mistake worth rejecting.
 func ClearCrop(name string, stepIndex int) (*Session, error) {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1406,7 +1505,8 @@ func cropLogValue(c *CropRect) string {
 // same as every other edit in EditLog, even though the pixel-level work
 // isn't session package's to do for those three operations.
 func LogEdit(name string, entry EditEntry) error {
-	s, dir, err := Load(name)
+	s, dir, unlock, err := loadForUpdate(name)
+	defer unlock()
 	if err != nil {
 		return err
 	}
