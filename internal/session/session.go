@@ -284,11 +284,29 @@ func Root() (string, error) {
 
 // Dir returns the folder for a named session: ~/.loomless/sessions/<name>.
 func Dir(name string) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", err
+	}
 	root, err := Root()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(root, "sessions", name), nil
+}
+
+// ValidateName rejects any session name that isn't a single, plain path
+// component — empty, ".", "..", or anything containing a path separator
+// would let filepath.Join in Dir resolve somewhere other than one
+// directory directly under ~/.loomless/sessions (e.g. "../../x" escapes
+// to ~/x). Enforced here, in Dir, rather than in each caller, because
+// every entry point — Create, Load, Rename, export, the editor, the
+// browser dashboard — goes through Dir; a check in only some of them is
+// exactly how Create ended up without one while Rename had it.
+func ValidateName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("invalid session name %q (use letters, numbers, dashes — no slashes)", name)
+	}
+	return nil
 }
 
 func metaPath(dir string) string {
@@ -435,8 +453,8 @@ func Rename(oldName, newName string) (*Session, error) {
 		s, _, err := Load(oldName)
 		return s, err
 	}
-	if newName == "" || newName == "." || newName == ".." || strings.ContainsAny(newName, "/\\") {
-		return nil, fmt.Errorf("invalid session name %q", newName)
+	if err := ValidateName(newName); err != nil {
+		return nil, err
 	}
 
 	s, oldDir, err := Load(oldName)
