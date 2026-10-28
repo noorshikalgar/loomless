@@ -2889,6 +2889,74 @@ wide quickstart code block scrolls horizontally within its own
 `overflow-x:auto` container rather than pushing the page wider, and
 checked the browser console for errors (none).
 
+## 42. Browser dashboard (`loomless serve`) for CLI-averse users
+
+Decided 2026-09-01. The user's reasoning, stated directly: "many QA
+folks don't know the CLI" — someone testing a feature and wanting to
+document a bug report shouldn't need to learn `record start`/`step`/
+`export` flags first. Needed: record, browse, edit, export, and rename
+every session from one page, plus a way to launch it without typing a
+command at all.
+
+**New `internal/dashboard` package, not an extension of
+`internal/editor`.** The editor's HTML/JS fetches its own API via
+absolute paths (`/api/session`, `/images/{file}`, etc.) — correct for
+the one-session-per-server model `cmd/loomless/tui.go` already
+established, but meaning several sessions' editors can't be mounted
+under path prefixes (`/edit/name-a/`, `/edit/name-b/`) on one shared
+server without every session's JS colliding on the same absolute
+`/api/...` routes. Rather than rewrite the editor to be prefix-aware
+for what's genuinely the exception (multiple sessions' editors open at
+once), the dashboard's "Edit" button lazily starts (or reuses) a
+dedicated `editor.NewHandler(name)` server on its own ephemeral port —
+the exact same pattern the TUI's own `openEditor` already uses — and
+just hands the browser that URL to open in a new tab. Zero changes
+needed to `internal/editor` at all.
+
+**Routes:** `GET /` (recent 5 + a "+ New Recording" form), `GET
+/sessions` (the full list), and `POST /api/sessions{,/{name}/stop,
+/rename, /export, /edit}`. Create/stop/export call the exact same
+`engine.StartRecording`/`StopRecordingNamed`/`Export*` functions the
+CLI, TUI, and MCP server already call — no fourth code path that could
+drift. Metadata per session (steps, screenshots, exported-per-format)
+is computed the same way `tui.go`'s `renderDetail` does: real files
+checked on disk, never an in-memory flag.
+
+**No Go unit tests for this package** — consistent with
+`internal/editor`, which also has none: an HTTP-handler-plus-inline-
+HTML/JS presentation layer is exercised far more meaningfully by
+actually loading it in a browser than by asserting on raw HTML strings
+in Go. Verified live instead (see below).
+
+**Double-click launcher (`Launch Loomless.command`).** The other half
+of "QA folks don't know the CLI" is not needing to type `loomless
+serve` either — a macOS `.command` file (Finder opens Terminal
+automatically for these) that `cd`s next to itself and runs `./loomless
+serve`, which then opens the browser on its own. It still requires a
+prebuilt `loomless` binary sitting next to it (this repo has no release
+pipeline yet, so "download one exe, run it" isn't fully true yet — a
+build-once-yourself-then-double-click-forever middle ground for now,
+documented plainly rather than overclaimed in the README).
+
+**Verified:** `go build/vet/gofmt/test` clean, Linux cross-compile
+clean. Live end-to-end in a real browser against `loomless serve`: hit
+the home page, started a new recording through the form (which then
+auto-captured two real clicks made while testing — confirming the
+click daemon works identically whether started from the CLI, TUI, or
+this dashboard), stopped it via a direct API call (the UI's `confirm()`
+dialog doesn't surface in a screenshot-driven browser session, so the
+underlying endpoint was hit directly and the card's status/step-count
+was confirmed to update correctly after a reload), exported to
+Markdown and confirmed the `.md` file on disk, clicked "Edit" and
+confirmed it opened the correct session's editor on its own port,
+renamed a session via direct API call and confirmed both the directory
+rename and the `/sessions` list reflecting it (export badges correctly
+reset to "not exported," since the old export file exists under the
+old name, matching existing rename semantics elsewhere in the
+codebase). Mobile width (375px) confirmed with no horizontal overflow.
+The launcher script itself was executed directly (not just read) and
+confirmed to start a working server on its own port.
+
 ## GitHub remote
 
 Decided 2026-08-03: staying local-only for now. `git init` is done, commits

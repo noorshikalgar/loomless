@@ -100,7 +100,14 @@ go build -o loomless ./cmd/loomless
 ./loomless export my-first-story --format pdf    # or a PDF, screenshots embedded
 ./loomless export my-first-story --format slides # or a self-contained HTML slide deck
 ./loomless tui                                # or: browse all sessions, edit/export from a terminal dashboard
+./loomless serve                              # or: a browser dashboard — record/edit/export with no CLI at all
 ```
+
+**No CLI, no problem:** `loomless serve` opens a browser dashboard —
+record, edit, export, and rename any session with buttons, meant for
+teammates (QA, for instance) who'd rather not touch a terminal. Build
+the binary once, then double-click [`Launch Loomless.command`](Launch%20Loomless.command)
+(macOS) any time after — it opens Terminal and the browser for you.
 
 **Linux (X11) dependencies:** `xdotool`, `wmctrl`, `xprop` (usually
 preinstalled), and [`maim`](https://github.com/naelstrof/maim) for

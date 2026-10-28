@@ -1,0 +1,314 @@
+// Package dashboard is a QA-friendly front door for Loomless: a single
+// page listing every session (recent + full history), with buttons to
+// start a new recording, stop one, rename it, export it, or open its
+// editor — no CLI knowledge required. This is deliberately a thin
+// presentation layer over the same internal/session and internal/engine
+// functions the CLI, TUI, and MCP server already call; it holds no
+// session state of its own beyond the map of per-session editor servers
+// it has lazily started (mirroring cmd/loomless/tui.go's own
+// runningEditor pattern, since a session's editor genuinely does need
+// to keep running on its own dedicated port — see openEditor below for
+// why this dashboard doesn't just mount the editor under a URL prefix
+// instead).
+package dashboard
+
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+
+	"github.com/noorshikalgar/loomless/internal/editor"
+	"github.com/noorshikalgar/loomless/internal/engine"
+	"github.com/noorshikalgar/loomless/internal/session"
+)
+
+// runningEditor tracks one session's already-started per-session editor
+// server, exactly like cmd/loomless/tui.go's own type of the same name —
+// this package deliberately doesn't share that one (it lives in package
+// main) rather than introduce a cross-cutting shared type for what's a
+// two-field struct used in two presentation layers.
+type runningEditor struct {
+	url    string
+	server *http.Server
+}
+
+// Handler is the dashboard's HTTP handler plus the small bit of
+// process-lifetime state it needs: which sessions already have an
+// editor server running, so clicking "Edit" twice reopens the same
+// server/tab instead of binding a second port to the same session.
+type Handler struct {
+	mux *http.ServeMux
+
+	editorsMu sync.Mutex
+	editors   map[string]*runningEditor
+}
+
+// NewHandler builds the dashboard's HTTP handler.
+func NewHandler() (http.Handler, error) {
+	h := &Handler{
+		mux:     http.NewServeMux(),
+		editors: make(map[string]*runningEditor),
+	}
+	h.routes()
+	return h, nil
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
+}
+
+func (h *Handler) routes() {
+	h.mux.HandleFunc("GET /{$}", h.handleHome)
+	h.mux.HandleFunc("GET /sessions", h.handleSessions)
+	h.mux.HandleFunc("POST /api/sessions", h.handleCreate)
+	h.mux.HandleFunc("POST /api/sessions/{name}/stop", h.handleStop)
+	h.mux.HandleFunc("POST /api/sessions/{name}/rename", h.handleRename)
+	h.mux.HandleFunc("POST /api/sessions/{name}/export", h.handleExport)
+	h.mux.HandleFunc("POST /api/sessions/{name}/edit", h.handleEdit)
+}
+
+// summary is everything the dashboard shows about one session — the
+// same facts cmd/loomless/tui.go's renderDetail shows, computed the
+// same way (real files on disk, not an in-memory flag), just rendered
+// as a table row instead of a detail pane.
+type summary struct {
+	Name        string `json:"name"`
+	Recording   bool   `json:"recording"`
+	Steps       int    `json:"steps"`
+	Screenshots int    `json:"screenshots"`
+	Started     string `json:"started"`
+	Stopped     string `json:"stopped,omitempty"`
+	Dir         string `json:"dir"`
+	ExportedMD  bool   `json:"exported_md"`
+	ExportedPDF bool   `json:"exported_pdf"`
+	ExportedSl  bool   `json:"exported_slides"`
+	EditorURL   string `json:"editor_url,omitempty"`
+}
+
+func (h *Handler) summaries() ([]summary, error) {
+	sessions, err := session.List()
+	if err != nil {
+		return nil, err
+	}
+	// session.List already sorts; newest-first is what both "recent" and
+	// "all" views want, so sort once here rather than in each handler.
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessions[i].StartedAt.After(sessions[j].StartedAt)
+	})
+
+	h.editorsMu.Lock()
+	defer h.editorsMu.Unlock()
+
+	out := make([]summary, 0, len(sessions))
+	for _, s := range sessions {
+		dir, err := session.Dir(s.Name)
+		if err != nil {
+			continue
+		}
+		screenshots := 0
+		for _, step := range s.Steps {
+			if step.ImageFile != "" {
+				screenshots++
+			}
+		}
+		sm := summary{
+			Name:        s.Name,
+			Recording:   s.StoppedAt == nil,
+			Steps:       len(s.Steps),
+			Screenshots: screenshots,
+			Started:     s.StartedAt.Format("2006-01-02 15:04"),
+			Dir:         dir,
+			ExportedMD:  fileExists(filepath.Join(dir, s.Name+".md")),
+			ExportedPDF: fileExists(filepath.Join(dir, s.Name+".pdf")),
+			ExportedSl:  fileExists(filepath.Join(dir, s.Name+".html")),
+		}
+		if s.StoppedAt != nil {
+			sm.Stopped = s.StoppedAt.Format("2006-01-02 15:04")
+		}
+		if ed, ok := h.editors[s.Name]; ok {
+			sm.EditorURL = ed.url
+		}
+		out = append(out, sm)
+	}
+	return out, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func (h *Handler) handleHome(w http.ResponseWriter, r *http.Request) {
+	sums, err := h.summaries()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	recent := sums
+	if len(recent) > 5 {
+		recent = recent[:5]
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, homeHTML(recent, len(sums)))
+}
+
+func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
+	sums, err := h.summaries()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, sessionsHTML(sums))
+}
+
+// handleCreate starts a new recording — the browser equivalent of
+// `loomless record start <name>`. Highlight ring and auto-captions stay
+// off by default here too, same reasoning as the TUI's own "n" (new
+// session) key: a new per-click behavior earns opt-in, not default-on.
+func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	_, watching, warning, err := engine.StartRecording(body.Name, false, false)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Watching bool   `json:"watching"`
+		Warning  string `json:"warning,omitempty"`
+	}{watching, warning})
+}
+
+func (h *Handler) handleStop(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if _, err := engine.StopRecordingNamed(name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleRename(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := session.Rename(name, body.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// The editor server we may have started for the old name is now
+	// stale (session.Dir(oldName) no longer exists) — drop it so a
+	// later "Edit" click starts a fresh one under the new name instead
+	// of reopening a server pointed at a renamed-away directory.
+	h.editorsMu.Lock()
+	if ed, ok := h.editors[name]; ok {
+		ed.server.Close()
+		delete(h.editors, name)
+	}
+	h.editorsMu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleExport mirrors the editor's own POST /api/export exactly —
+// same engine.Export* calls — so exporting from the dashboard can never
+// produce different output than exporting from the CLI, TUI, or a
+// session's own editor page.
+func (h *Handler) handleExport(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Format string `json:"format"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var path string
+	var err error
+	switch body.Format {
+	case "md", "markdown":
+		path, _, err = engine.ExportMarkdown(name)
+	case "pdf":
+		path, err = engine.ExportPDF(name)
+	case "slides":
+		path, err = engine.ExportSlides(name)
+	default:
+		http.Error(w, fmt.Sprintf("unknown format %q (want md, pdf, or slides)", body.Format), http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Path string `json:"path"`
+	}{path})
+}
+
+// handleEdit lazily starts (or reuses) a dedicated editor server for
+// this session and returns its URL for the browser to open in a new
+// tab. A session's editor HTML/JS (internal/editor/html.go) fetches
+// its own API via absolute paths like "/api/session" — correct for the
+// one-session-per-server model cmd/loomless/tui.go already uses, but
+// meaning this dashboard can't just mount several sessions' editors
+// under path prefixes on its own server (every session's JS would hit
+// the dashboard's OWN "/api/session" instead of its own). Giving each
+// session its own real server on its own port, exactly like the TUI
+// already does, sidesteps that entirely rather than rewriting the
+// editor's own routing to be prefix-aware for a case (multiple sessions
+// open at once) that's the exception, not the rule.
+func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	h.editorsMu.Lock()
+	defer h.editorsMu.Unlock()
+
+	if ed, ok := h.editors[name]; ok {
+		writeEditorURL(w, ed.url)
+		return
+	}
+
+	handler, err := editor.NewHandler(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	url := fmt.Sprintf("http://%s/", ln.Addr().String())
+	srv := &http.Server{Handler: handler}
+	go srv.Serve(ln) //nolint:errcheck // srv.Close() always returns http.ErrServerClosed, nothing actionable
+	h.editors[name] = &runningEditor{url: url, server: srv}
+	writeEditorURL(w, url)
+}
+
+func writeEditorURL(w http.ResponseWriter, url string) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		URL string `json:"url"`
+	}{url})
+}
