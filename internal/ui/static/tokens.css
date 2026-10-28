@@ -1,0 +1,243 @@
+/* Loomless design tokens.
+ *
+ * Every Loomless page (dashboard, per-session editor) reads ALL color,
+ * type, spacing, radius, shadow, and motion values from these custom
+ * properties — never a literal — so a theme is nothing more than a block
+ * of overrides on html[data-theme]. Chrome tokens (surfaces, borders,
+ * text, accent) change per theme; semantic tokens (success/danger/
+ * shape) keep their meaning everywhere but get lighter/darker variants
+ * so they stay legible on light themes. The one color deliberately NOT
+ * a token is the annotation red (#ff3b30): it's real data, matching
+ * capture.DefaultAnnotationColor in Go, not UI chrome.
+ */
+
+@font-face {
+  font-family: "Geist";
+  src: url("/ui/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/ui/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* --- type --- */
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --leading: 1.5;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --tracking-tight: -0.015em;
+
+  /* --- space (4px grid) --- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* --- shape --- */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-full: 999px;
+  --control-h: 2rem;
+  --control-h-sm: 1.75rem;
+
+  /* --- motion --- */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+
+  /* --- default theme: Loomless Dark --- */
+  color-scheme: dark;
+  --bg: #1a1a1e;
+  --surface: #232328;
+  --surface-2: #2a2a30;
+  --surface-2-hover: #3a3a42;
+  --surface-inset: #17171a;
+  --border: #444;
+  --border-soft: #333;
+  --text: #f0f0f0;
+  --text-soft: #ccc;
+  --text-muted: #999;
+  --accent: #8ab4ff;
+  --on-accent: #0b1220;
+  --accent-bg: #2a4a6a;
+  --accent-border: #3c6ca0;
+  --code-bg: #26262b;
+
+  --success: #7ee787;
+  --success-bg: #2a5a3a;
+  --success-hover: #366e46;
+  --success-border: #3a7a4a;
+  --on-success: #f0f0f0;
+  --danger: #ff6b6b;
+  --danger-bg: #7a2a2a;
+  --danger-border: #a03c3c;
+  --on-danger: #f0f0f0;
+  --warning: #ffb020;
+  --shape-bg: #3a2a6a;
+  --shape-border: #5c4c9c;
+  --on-shape: #f0f0f0;
+  --recording: #ff8a8a;
+  --recording-bg: #5a2a2a;
+
+  --overlay: rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+html[data-theme="loomless-light"] {
+  color-scheme: light;
+  --bg: #f6f6f7;
+  --surface: #ffffff;
+  --surface-2: #f0f0f2;
+  --surface-2-hover: #e4e4e8;
+  --surface-inset: #f3f3f5;
+  --border: #d4d4d8;
+  --border-soft: #e4e4e7;
+  --text: #18181b;
+  --text-soft: #3f3f46;
+  --text-muted: #71717a;
+  --accent: #2563eb;
+  --on-accent: #ffffff;
+  --accent-bg: #dbeafe;
+  --accent-border: #93c5fd;
+  --code-bg: #ececf0;
+
+  --success: #1a7f37;
+  --success-bg: #1f883d;
+  --success-hover: #1a7f37;
+  --success-border: #1a7f37;
+  --on-success: #ffffff;
+  --danger: #cf222e;
+  --danger-bg: #cf222e;
+  --danger-border: #a40e26;
+  --on-danger: #ffffff;
+  --warning: #9a6700;
+  --shape-bg: #8250df;
+  --shape-border: #6639ba;
+  --on-shape: #ffffff;
+  --recording: #cf222e;
+  --recording-bg: #ffebe9;
+
+  --overlay: rgba(24, 24, 27, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.16);
+}
+
+html[data-theme="tokyo-night"] {
+  --bg: #1a1b26;
+  --surface: #24283b;
+  --surface-2: #292e42;
+  --surface-2-hover: #343b58;
+  --surface-inset: #16161e;
+  --border: #3b4261;
+  --border-soft: #2a2e42;
+  --text: #c0caf5;
+  --text-soft: #a9b1d6;
+  --text-muted: #565f89;
+  --accent: #7aa2f7;
+  --on-accent: #16161e;
+  --accent-bg: #2c3453;
+  --accent-border: #3d59a1;
+  --code-bg: #1f2335;
+}
+
+html[data-theme="gruvbox"] {
+  --bg: #282828;
+  --surface: #3c3836;
+  --surface-2: #504945;
+  --surface-2-hover: #665c54;
+  --surface-inset: #1d2021;
+  --border: #504945;
+  --border-soft: #3c3836;
+  --text: #ebdbb2;
+  --text-soft: #d5c4a1;
+  --text-muted: #a89984;
+  --accent: #83a598;
+  --on-accent: #1d2021;
+  --accent-bg: #3c4b48;
+  --accent-border: #5a7d75;
+  --code-bg: #32302f;
+}
+
+html[data-theme="github-dark"] {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #21262d;
+  --surface-2-hover: #30363d;
+  --surface-inset: #010409;
+  --border: #30363d;
+  --border-soft: #21262d;
+  --text: #c9d1d9;
+  --text-soft: #adbac7;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --on-accent: #0d1117;
+  --accent-bg: #1c3a5e;
+  --accent-border: #1f6feb;
+  --code-bg: #161b22;
+}
+
+html[data-theme="catppuccin"] {
+  /* Catppuccin Mocha */
+  --bg: #1e1e2e;
+  --surface: #181825;
+  --surface-2: #313244;
+  --surface-2-hover: #45475a;
+  --surface-inset: #11111b;
+  --border: #45475a;
+  --border-soft: #313244;
+  --text: #cdd6f4;
+  --text-soft: #bac2de;
+  --text-muted: #7f849c;
+  --accent: #89b4fa;
+  --on-accent: #11111b;
+  --accent-bg: #2a3550;
+  --accent-border: #4b6aa8;
+  --code-bg: #313244;
+}
+
+html[data-theme="nord"] {
+  --bg: #2e3440;
+  --surface: #3b4252;
+  --surface-2: #434c5e;
+  --surface-2-hover: #4c566a;
+  --surface-inset: #272c36;
+  --border: #4c566a;
+  --border-soft: #434c5e;
+  --text: #eceff4;
+  --text-soft: #e5e9f0;
+  --text-muted: #8892a6;
+  --accent: #88c0d0;
+  --on-accent: #2e3440;
+  --accent-bg: #3b4f5f;
+  --accent-border: #5e81ac;
+  --code-bg: #3b4252;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur: 0ms; }
+}

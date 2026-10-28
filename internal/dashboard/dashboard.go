@@ -18,13 +18,16 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 
 	"github.com/noorshikalgar/loomless/internal/editor"
 	"github.com/noorshikalgar/loomless/internal/engine"
 	"github.com/noorshikalgar/loomless/internal/session"
+	"github.com/noorshikalgar/loomless/internal/ui"
 )
 
 // runningEditor tracks one session's already-started per-session editor
@@ -70,6 +73,8 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/sessions/{name}/rename", h.handleRename)
 	h.mux.HandleFunc("POST /api/sessions/{name}/export", h.handleExport)
 	h.mux.HandleFunc("POST /api/sessions/{name}/edit", h.handleEdit)
+	h.mux.HandleFunc("POST /api/sessions/{name}/reveal", h.handleReveal)
+	h.mux.Handle("/ui/", ui.Handler())
 }
 
 // summary is everything the dashboard shows about one session — the
@@ -82,6 +87,7 @@ type summary struct {
 	Steps       int    `json:"steps"`
 	Screenshots int    `json:"screenshots"`
 	Started     string `json:"started"`
+	StartedISO  string `json:"started_iso"`
 	Stopped     string `json:"stopped,omitempty"`
 	Dir         string `json:"dir"`
 	ExportedMD  bool   `json:"exported_md"`
@@ -121,7 +127,8 @@ func (h *Handler) summaries() ([]summary, error) {
 			Recording:   s.StoppedAt == nil,
 			Steps:       len(s.Steps),
 			Screenshots: screenshots,
-			Started:     s.StartedAt.Format("2006-01-02 15:04"),
+			Started:     s.StartedAt.Format("Jan 2, 2006 15:04"),
+			StartedISO:  s.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
 			Dir:         dir,
 			ExportedMD:  fileExists(filepath.Join(dir, s.Name+".md")),
 			ExportedPDF: fileExists(filepath.Join(dir, s.Name+".pdf")),
@@ -150,11 +157,20 @@ func (h *Handler) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	recent := sums
-	if len(recent) > 5 {
-		recent = recent[:5]
+	if len(recent) > 6 {
+		recent = recent[:6]
+	}
+	// Anything still recording gets a banner above everything else: for
+	// a non-technical user, "is it still capturing my clicks?" is the
+	// single most important piece of state on the page.
+	var recording []summary
+	for _, s := range sums {
+		if s.Recording {
+			recording = append(recording, s)
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, homeHTML(recent, len(sums)))
+	fmt.Fprint(w, homeHTML(recent, len(sums), recording))
 }
 
 func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -311,4 +327,62 @@ func writeEditorURL(w http.ResponseWriter, url string) {
 	json.NewEncoder(w).Encode(struct {
 		URL string `json:"url"`
 	}{url})
+}
+
+// handleReveal shows a session's files in the OS file manager — the
+// exported file itself (selected in Finder) when a format is given and
+// that export exists, otherwise the session folder. For someone who
+// doesn't live in a terminal, "Exported to /Users/…/.loomless/…" is a
+// dead end; a button that opens the folder with the file highlighted
+// is the actual finish line of the export flow.
+func (h *Handler) handleReveal(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	dir, err := session.Dir(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := os.Stat(dir); err != nil {
+		http.Error(w, fmt.Sprintf("session %q not found", name), http.StatusNotFound)
+		return
+	}
+	var body struct {
+		Format string `json:"format"`
+	}
+	// A body is optional; with none (or an empty one) we reveal the folder.
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	target, isFile := dir, false
+	if ext, ok := map[string]string{"md": ".md", "pdf": ".pdf", "slides": ".html"}[body.Format]; ok {
+		if p := filepath.Join(dir, name+ext); fileExists(p) {
+			target, isFile = p, true
+		}
+	}
+	if err := revealPath(target, isFile); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// revealPath is a package-level var so tests can stub it instead of
+// actually opening Finder windows.
+var revealPath = func(path string, isFile bool) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		if isFile {
+			cmd = exec.Command("open", "-R", path) // Finder, with the file selected
+		} else {
+			cmd = exec.Command("open", path)
+		}
+	case "linux":
+		if isFile {
+			path = filepath.Dir(path) // xdg-open has no "select this file" mode
+		}
+		cmd = exec.Command("xdg-open", path)
+	default:
+		return fmt.Errorf("revealing files isn't supported on %s", runtime.GOOS)
+	}
+	return cmd.Start()
 }
