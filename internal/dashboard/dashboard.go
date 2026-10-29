@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/noorshikalgar/loomless/internal/editor"
 	"github.com/noorshikalgar/loomless/internal/engine"
@@ -74,6 +75,10 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("POST /api/sessions/{name}/export", h.handleExport)
 	h.mux.HandleFunc("POST /api/sessions/{name}/edit", h.handleEdit)
 	h.mux.HandleFunc("POST /api/sessions/{name}/reveal", h.handleReveal)
+	h.mux.HandleFunc("POST /api/sessions/{name}/delete", h.handleDelete)
+	h.mux.HandleFunc("POST /api/trash/{id}/restore", h.handleRestore)
+	h.mux.HandleFunc("GET /api/sessions", h.handleList)
+	h.mux.HandleFunc("GET /thumb/{name}", h.handleThumb)
 	h.mux.Handle("/ui/", ui.Handler())
 }
 
@@ -94,6 +99,8 @@ type summary struct {
 	ExportedPDF bool   `json:"exported_pdf"`
 	ExportedSl  bool   `json:"exported_slides"`
 	EditorURL   string `json:"editor_url,omitempty"`
+	HasThumb    bool   `json:"has_thumb"`
+	Duration    string `json:"duration,omitempty"`
 }
 
 func (h *Handler) summaries() ([]summary, error) {
@@ -134,8 +141,10 @@ func (h *Handler) summaries() ([]summary, error) {
 			ExportedPDF: fileExists(filepath.Join(dir, s.Name+".pdf")),
 			ExportedSl:  fileExists(filepath.Join(dir, s.Name+".html")),
 		}
+		sm.HasThumb = screenshots > 0
 		if s.StoppedAt != nil {
 			sm.Stopped = s.StoppedAt.Format("2006-01-02 15:04")
+			sm.Duration = humanDuration(s.StoppedAt.Sub(s.StartedAt))
 		}
 		if ed, ok := h.editors[s.Name]; ok {
 			sm.EditorURL = ed.url
@@ -385,4 +394,98 @@ var revealPath = func(path string, isFile bool) error {
 		return fmt.Errorf("revealing files isn't supported on %s", runtime.GOOS)
 	}
 	return cmd.Start()
+}
+
+// humanDuration renders a recording's length the way people say it
+// ("4m 12s", "1h 03m") rather than Go's "4m12.345s".
+func humanDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	h, m, sec := int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh %02dm", h, m)
+	case m > 0:
+		return fmt.Sprintf("%dm %02ds", m, sec)
+	default:
+		return fmt.Sprintf("%ds", sec)
+	}
+}
+
+// handleList returns every session summary as JSON — what the home
+// page polls while a recording is live, so its step count and latest
+// screenshot update without a reload.
+func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
+	sums, err := h.summaries()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(sums)
+}
+
+// handleThumb serves a session's first screenshot (or, with ?pos=last,
+// its newest one — the live recording panel's "what was just captured"
+// preview). Tiles without any screenshot get a 404 and render a
+// placeholder instead.
+func (h *Handler) handleThumb(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s, dir, err := session.Load(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var img string
+	if r.URL.Query().Get("pos") == "last" {
+		for i := len(s.Steps) - 1; i >= 0 && img == ""; i-- {
+			img = s.Steps[i].ImageFile
+		}
+	} else {
+		for i := 0; i < len(s.Steps) && img == ""; i++ {
+			img = s.Steps[i].ImageFile
+		}
+	}
+	if img == "" {
+		http.NotFound(w, r)
+		return
+	}
+	// ImageFile comes from session.json; confine it to the session
+	// directory anyway rather than trust a hand-edited file.
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFile(w, r, filepath.Join(dir, filepath.Clean("/"+img)))
+}
+
+// handleDelete moves a session to ~/.loomless/trash (session.Trash) —
+// never a hard delete — and returns the trash ID the page's "Undo"
+// toast sends back to handleRestore.
+func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	id, err := session.Trash(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.editorsMu.Lock()
+	if ed, ok := h.editors[name]; ok {
+		ed.server.Close()
+		delete(h.editors, name)
+	}
+	h.editorsMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		TrashID string `json:"trash_id"`
+	}{id})
+}
+
+func (h *Handler) handleRestore(w http.ResponseWriter, r *http.Request) {
+	name, err := session.Restore(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Name string `json:"name"`
+	}{name})
 }
