@@ -814,3 +814,33 @@ func TestEditHeaderStyleRejectsUnknownValue(t *testing.T) {
 		t.Error("EditHeaderStyle with an unrecognized style succeeded, want an error")
 	}
 }
+
+// Create used to accept any name — only Rename validated — so
+// Create("../../escaped") wrote a session directory outside
+// ~/.loomless/sessions entirely. Validation now lives in Dir, which
+// every entry point goes through.
+func TestCreateRejectsPathTraversalNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, name := range []string{"", ".", "..", "../../escaped", "a/b", `a\b`, "nul\x00byte"} {
+		if _, _, err := Create(name); err == nil {
+			t.Errorf("Create(%q) succeeded, want an invalid-name error", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "escaped")); err == nil {
+		t.Fatal("Create escaped the sessions directory")
+	}
+	if _, _, err := Create("ok-name_1"); err != nil {
+		t.Fatalf("Create(valid name) failed: %v", err)
+	}
+}
+
+func TestDirRejectsInvalidNames(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := Dir("../x"); err == nil {
+		t.Fatal("Dir(\"../x\") succeeded, want error")
+	}
+	if _, err := Dir("fine"); err != nil {
+		t.Fatalf("Dir(\"fine\") failed: %v", err)
+	}
+}
