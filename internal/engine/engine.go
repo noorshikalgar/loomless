@@ -107,16 +107,11 @@ func stopRecordingNamed(name string) (*session.Session, error) {
 	stopClickDaemon(dir)
 	stopIdleWatchdog(dir)
 
-	// Reload: the daemon may have appended steps after stopClickDaemon
-	// requested it shut down but before it actually finished doing so.
-	s, dir, err := session.Load(name)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.Stop(dir); err != nil {
-		return nil, err
-	}
-	return s, nil
+	// StopNamed reloads under the session lock: the daemon may have
+	// appended steps after stopClickDaemon requested it shut down but
+	// before it actually finished, and a locked reload guarantees those
+	// steps are in the version marked stopped rather than overwritten.
+	return session.StopNamed(name)
 }
 
 // CaptureStep captures the frontmost window (best-effort) as a step on the
