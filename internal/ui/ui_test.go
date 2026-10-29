@@ -2,9 +2,12 @@ package ui
 
 import (
 	"bytes"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -127,4 +130,67 @@ func TestEveryThemeHasTokens(t *testing.T) {
 			t.Errorf("theme %q has no html[data-theme] block in tokens.css", th.ID)
 		}
 	}
+}
+
+// Muted text (timestamps, step counts, hints) must stay readable on the
+// surfaces it sits on in every theme — WCAG AA, 4.5:1. Several palettes'
+// official "comment" color (Tokyo Night's #565f89, ~2.4:1) fail this, so
+// every theme is checked rather than trusting the palette's own values.
+func TestMutedTextContrastMeetsWCAGAA(t *testing.T) {
+	data, err := staticFS.ReadFile("static/tokens.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(data)
+	varRe := regexp.MustCompile(`--([\w-]+):\s*(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})\b`)
+	vars := func(block string) map[string]string {
+		m := map[string]string{}
+		for _, v := range varRe.FindAllStringSubmatch(block, -1) {
+			m[v[1]] = v[2]
+		}
+		return m
+	}
+	base := vars(regexp.MustCompile(`(?s):root\s*\{(.*?)\}`).FindStringSubmatch(css)[1])
+	themes := map[string]map[string]string{"loomless": base}
+	for _, m := range regexp.MustCompile(`(?s)html\[data-theme="([^"]+)"\]\s*\{(.*?)\}`).FindAllStringSubmatch(css, -1) {
+		merged := map[string]string{}
+		for k, v := range base {
+			merged[k] = v
+		}
+		for k, v := range vars(m[2]) {
+			merged[k] = v
+		}
+		themes[m[1]] = merged
+	}
+	for name, v := range themes {
+		for _, surface := range []string{"surface", "bg"} {
+			if r := contrast(v["text-muted"], v[surface]); r < 4.5 {
+				t.Errorf("theme %q: --text-muted %s on --%s %s is %.2f:1, want >= 4.5", name, v["text-muted"], surface, v[surface], r)
+			}
+		}
+	}
+}
+
+func contrast(a, b string) float64 {
+	la, lb := luminance(a), luminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+func luminance(hex string) float64 {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) == 3 {
+		hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+	}
+	ch := func(i int) float64 {
+		n, _ := strconv.ParseUint(hex[i:i+2], 16, 8)
+		c := float64(n) / 255
+		if c <= 0.03928 {
+			return c / 12.92
+		}
+		return math.Pow((c+0.055)/1.055, 2.4)
+	}
+	return 0.2126*ch(0) + 0.7152*ch(2) + 0.0722*ch(4)
 }
