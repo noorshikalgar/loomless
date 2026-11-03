@@ -1,4 +1,4 @@
-//go:build unix
+//go:build !windows
 
 package session
 
@@ -28,4 +28,10 @@ func lockDir(dir string) (func(), error) {
 		return nil, err
 	}
 	return func() { f.Close() }, nil // closing the fd releases the flock
+}
+
+// renameReplacing is os.Rename: on Unix, replacing a file other
+// processes have open is always fine.
+func renameReplacing(from, to string) error {
+	return os.Rename(from, to)
 }

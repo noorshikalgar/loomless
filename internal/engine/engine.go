@@ -18,11 +18,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/noorshikalgar/loomless/internal/capture"
@@ -315,6 +313,7 @@ func startBackgroundProcess(subcommand, name, pidPath, logPath string, extraArgs
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
+	clearStopRequest(pidPath)
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return fmt.Errorf("create log: %w", err)
@@ -323,7 +322,7 @@ func startBackgroundProcess(subcommand, name, pidPath, logPath string, extraArgs
 	cmd := exec.Command(exe, append([]string{subcommand, name}, extraArgs...)...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedAttr()
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("start %s: %w", subcommand, err)
@@ -349,7 +348,7 @@ func stopBackgroundProcess(pidPath string) {
 		return
 	}
 	if proc, err := os.FindProcess(pid); err == nil {
-		_ = proc.Signal(syscall.SIGTERM)
+		requestStop(proc, pidPath)
 	}
 	// Let it flush any in-flight work before the caller finalizes state
 	// that depends on it having stopped.
@@ -387,7 +386,7 @@ func findFailureLine(path string) (line string, found bool) {
 // RunClickDaemon is the click-daemon process's entrypoint (relaunched by
 // startClickDaemon as "loomless __click-daemon <name>"): installs the global
 // click listener and, on every debounced click, captures the frontmost
-// window as a step. Runs until SIGTERM (sent by stopClickDaemon). Logging
+// window as a step. Runs until stopClickDaemon asks it to stop (SIGTERM, or a stop file on Windows — see proc_windows.go). Logging
 // goes through the provided logf so the CLI can direct it to the daemon's
 // log file as before. autoCaption controls whether captured steps get an
 // automatically-generated caption (decision #33) — see buildAutoCaption.
@@ -395,10 +394,13 @@ func RunClickDaemon(name string, highlightClicks, autoCaption bool, logf func(fo
 	// CFRunLoopRun must run on the thread that installed the tap.
 	runtime.LockOSThread()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	dir, err := session.Dir(name)
+	if err != nil {
+		return err
+	}
+	stop := stopRequested(session.DaemonPIDPath(dir))
 	go func() {
-		<-sigCh
+		<-stop
 		capture.StopClickHook()
 	}()
 
@@ -535,13 +537,16 @@ func durationEnv(key string, def time.Duration) time.Duration {
 // recording — stop?" soft nudge from docs/product/07-edge-cases.md, for a
 // recording left running accidentally. Exits when the session is stopped
 // (session.json's stopped_at gets set — detected on the next poll) or on
-// SIGTERM (sent by stopIdleWatchdog). Runs unconditionally alongside
+// a stop request from stopIdleWatchdog. Runs unconditionally alongside
 // click-capture, not as part of it, so it still works when click-capture
 // itself isn't available (e.g. Linux, decision #10).
 func RunIdleWatchdog(name string, logf func(format string, args ...any)) error {
 	warnAfter := idleWarnAfter()
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	dir, err := session.Dir(name)
+	if err != nil {
+		return err
+	}
+	stop := stopRequested(session.IdleWatchdogPIDPath(dir))
 	ticker := time.NewTicker(idleCheckInterval())
 	defer ticker.Stop()
 
@@ -549,7 +554,7 @@ func RunIdleWatchdog(name string, logf func(format string, args ...any)) error {
 	var lastNotified time.Time
 	for {
 		select {
-		case <-sigCh:
+		case <-stop:
 			logf("idle-watchdog: stopped")
 			return nil
 		case <-ticker.C:

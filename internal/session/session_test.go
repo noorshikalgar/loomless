@@ -844,3 +844,15 @@ func TestDirRejectsInvalidNames(t *testing.T) {
 		t.Fatalf("Dir(\"fine\") failed: %v", err)
 	}
 }
+
+func TestCreateRejectsNamesWindowsCantStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"bug: login", "a*b", `say "hi"`, "what?", "a|b", "<x>", "trailing.", "trailing ", "tab\there"} {
+		if _, _, err := Create(name); err == nil {
+			t.Errorf("Create(%q) succeeded, want error", name)
+		}
+	}
+	if _, _, err := Create("checkout-v2.1_retry (2)"); err != nil {
+		t.Fatalf("ordinary name rejected: %v", err)
+	}
+}

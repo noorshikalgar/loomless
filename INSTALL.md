@@ -43,6 +43,31 @@ ask for the permissions again after each rebuild.
 
 Anything the app would have printed goes to `~/.loomless/app.log`.
 
+## Desktop app (Windows)
+
+Built from any OS — the Windows build is pure Go, no Windows machine or
+C compiler needed:
+
+```bash
+packaging/windows/build.sh              # → dist/windows-amd64/
+ARCH=arm64 packaging/windows/build.sh   # Windows on ARM
+```
+
+Copy the folder to the PC and double-click **`Loomless.exe`**: the
+dashboard opens in its own window. `loomless-cli.exe` is the same
+program for the command line (`loomless-cli record start …`). Every CI
+run also attaches both, ready to download, under the run's Artifacts.
+
+- No permission prompts — Windows doesn't gate click capture or
+  screenshots. Clicks inside apps running **as administrator** aren't
+  seen unless Loomless runs as administrator too.
+- The window uses Edge WebView2, built into Windows 11 and most updated
+  Windows 10 PCs. Without it, Loomless opens in the default browser.
+- The `.exe` isn't code-signed yet, so SmartScreen shows "Windows
+  protected your PC" on first launch: **More info → Run anyway**.
+- Recordings live in `%USERPROFILE%\.loomless`; the app log is
+  `%USERPROFILE%\.loomless\app.log`.
+
 ## macOS permissions — what each one is for, and what happens without it
 
 Loomless asks macOS for two permissions the first time it needs them.

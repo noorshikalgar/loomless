@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS: cgo capture code + the WKWebView desktop window.
+        # Windows: the pure-Go Win32 capture backend, LockFileEx, and the
+        # stop-file daemon handshake run for real here (no Windows
+        # machine is needed to build, but only one can test).
+        # Linux: the X11 backend; keeps the cross-platform split honest.
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        run: go test -race ./...
+
+  # Builds the double-clickable apps and attaches them to the run, so a
+  # tester can download them from the Actions tab without any toolchain.
+  package:
+    name: package (${{ matrix.target }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            os: macos-latest
+            # Zipped with ditto first: artifact uploads drop the execute
+            # bit, which would leave the .app unable to launch.
+            script: UNIVERSAL=1 packaging/macos/build-app.sh && ditto -c -k --keepParent dist/Loomless.app dist/Loomless-macos.zip
+            path: dist/Loomless-macos.zip
+          - target: windows-amd64
+            os: ubuntu-latest
+            script: ARCH=amd64 packaging/windows/build.sh
+            path: dist/windows-amd64
+          - target: windows-arm64
+            os: ubuntu-latest
+            script: ARCH=arm64 packaging/windows/build.sh
+            path: dist/windows-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: build
+        run: ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Loomless-${{ matrix.target }}
+          path: ${{ matrix.path }}
+          retention-days: 14

@@ -309,6 +309,23 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// validateNewName is ValidateName plus what Windows forbids in file
+// names — `<>:"|?*`, control characters, and a trailing dot or space
+// (which Windows silently strips, so "demo." would save as "demo") —
+// enforced on every OS so a recording made on a Mac can always be copied
+// to a Windows machine. Only checked when a name is chosen (Create,
+// Rename): existing recordings that predate the rule stay openable.
+func validateNewName(name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	if strings.ContainsAny(name, `<>:"|?*`) || strings.IndexFunc(name, func(r rune) bool { return r < 0x20 }) >= 0 ||
+		strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return fmt.Errorf(`invalid session name %q (use letters, numbers, dashes — not : * ? " < > | or a trailing dot)`, name)
+	}
+	return nil
+}
+
 func metaPath(dir string) string {
 	return filepath.Join(dir, "session.json")
 }
@@ -360,6 +377,9 @@ func currentPath() (string, error) {
 // Create starts a new session on disk and marks it current. Fails if a
 // session with this name already exists.
 func Create(name string) (*Session, string, error) {
+	if err := validateNewName(name); err != nil {
+		return nil, "", err
+	}
 	dir, err := Dir(name)
 	if err != nil {
 		return nil, "", err
@@ -453,7 +473,7 @@ func Rename(oldName, newName string) (*Session, error) {
 		s, _, err := Load(oldName)
 		return s, err
 	}
-	if err := ValidateName(newName); err != nil {
+	if err := validateNewName(newName); err != nil {
 		return nil, err
 	}
 
@@ -574,7 +594,7 @@ func writeFileAtomic(path string, data []byte) error {
 		os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameReplacing(tmpName, path); err != nil {
 		os.Remove(tmpName)
 		return err
 	}
