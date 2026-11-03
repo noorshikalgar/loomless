@@ -374,6 +374,16 @@ func (h *Handler) handleReveal(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// fileManager is what the OS calls its file browser, for "Show in …"
+// labels.
+var fileManager = map[string]string{"darwin": "Finder", "windows": "File Explorer"}[runtime.GOOS]
+
+func init() {
+	if fileManager == "" {
+		fileManager = "file manager"
+	}
+}
+
 // revealPath is a package-level var so tests can stub it instead of
 // actually opening Finder windows.
 var revealPath = func(path string, isFile bool) error {
@@ -390,6 +400,16 @@ var revealPath = func(path string, isFile bool) error {
 			path = filepath.Dir(path) // xdg-open has no "select this file" mode
 		}
 		cmd = exec.Command("xdg-open", path)
+	case "windows":
+		if isFile {
+			// One argument, exactly "/select,<path>": explorer.exe parses
+			// its own command line and rejects the quoted form Go would
+			// produce for separate arguments.
+			cmd = exec.Command("explorer.exe")
+			cmd.SysProcAttr = explorerSelectAttr(path)
+		} else {
+			cmd = exec.Command("explorer.exe", path)
+		}
 	default:
 		return fmt.Errorf("revealing files isn't supported on %s", runtime.GOOS)
 	}

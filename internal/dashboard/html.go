@@ -106,6 +106,7 @@ func shell(p page) string {
 ` + p.body + `
 </main>
 </div>
+<script>var FILE_MANAGER = '` + fileManager + `';</script>
 <script>` + dashboardJS + `</script>
 </body></html>`
 }
@@ -226,7 +227,7 @@ func tile(s summary) string {
 		format, text string
 	}{{s.ExportedMD, "md", "MD"}, {s.ExportedPDF, "pdf", "PDF"}, {s.ExportedSl, "slides", "Slides"}} {
 		if p.on {
-			fmt.Fprintf(&pills, `<button class="pill" data-action="reveal" data-format="%s" data-name="%s" title="Show %s in Finder">%s</button>`, p.format, name, p.text, p.text)
+			fmt.Fprintf(&pills, `<button class="pill" data-action="reveal" data-format="%s" data-name="%s" title="Show %s in %s">%s</button>`, p.format, name, p.text, fileManager, p.text)
 		}
 	}
 	meta := `<time datetime="` + s.StartedISO + `" title="` + html.EscapeString(s.Started) + `">` + html.EscapeString(s.Started) + `</time>`
@@ -257,7 +258,7 @@ func tile(s summary) string {
           <button class="menu-item" data-action="export" data-format="slides" data-name="%s">%s Export slide deck</button>
           <div class="menu-sep"></div>
           <button class="menu-item" data-action="rename" data-name="%s">%s Rename…</button>
-          <button class="menu-item" data-action="reveal" data-name="%s">%s Show in Finder</button>
+          <button class="menu-item" data-action="reveal" data-name="%s">%s Show in `+fileManager+`</button>
           <div class="menu-sep"></div>
           %s
         </div>
@@ -526,7 +527,7 @@ const dashboardJS = `
 
   function reveal(name, format) {
     return api('POST', sessionPath(name, 'reveal'), format ? {format: format} : {})
-      .catch(function(e) { Loomless.toast(e.message || 'Could not open Finder.', 'error'); });
+      .catch(function(e) { Loomless.toast(e.message || 'Could not open ' + FILE_MANAGER + '.', 'error'); });
   }
 
   // ---- relative timestamps ----
@@ -685,7 +686,7 @@ const dashboardJS = `
       Loomless.toast('Exporting ' + FORMAT_LABEL[format] + '…');
       apiJSON('POST', sessionPath(name, 'export'), {format: format}).then(function() {
         Loomless.toast(FORMAT_LABEL[format] + ' ready.', 'success', {
-          label: 'Show in Finder',
+          label: 'Show in ' + FILE_MANAGER,
           onClick: function() { reveal(name, format); },
         });
         var pills = tile && tile.querySelector('.pills');
@@ -695,7 +696,7 @@ const dashboardJS = `
           p.dataset.action = 'reveal';
           p.dataset.format = format;
           p.dataset.name = name;
-          p.title = 'Show ' + FORMAT_PILL[format] + ' in Finder';
+          p.title = 'Show ' + FORMAT_PILL[format] + ' in ' + FILE_MANAGER;
           p.textContent = FORMAT_PILL[format];
           pills.appendChild(p);
         }

@@ -37,7 +37,7 @@ see decisions #14/#16/#18**; auto-captions: **local template by
 default, macOS Accessibility API grounding, optional LLM rewrite via
 Anthropic/OpenAI/Gemini/a local Ollama server — only when
 `LOOMLESS_LLM_PROVIDER` names one explicitly, see decisions #33/#34**).
-Not done: Windows, Wayland, sharing — all later phases.
+Not done: Wayland, sharing — later phases. Windows is new and not yet verified on real hardware (see below).
 
 ## Platform support
 
@@ -45,9 +45,9 @@ Not done: Windows, Wayland, sharing — all later phases.
 |---|---|---|
 | **macOS** | ✅ Fully supported | The primary development platform — every feature (click capture, terminal capture, local editor, TUI, MCP server, auto-captions) is built and continuously exercised here. This is where bugs get caught first. |
 | **Linux (X11)** | ⚠️ Partial, less-tested | Window/terminal capture and export are implemented and were verified against a real X11 session (a container running Xvfb + fluxbox + `xdotool`/`wmctrl`/`xprop`/`maim`, not just cross-compiled — see decision #10), which caught and fixed two real bugs. Automatic click-capture isn't implemented (X11 needs the XTest/RECORD extension or privileged input access — see decision #10). The local editor and TUI have no platform-specific code but haven't been independently verified running on Linux the way capture has, so treat them as "should work," not "confirmed." **Wayland isn't supported at all** — every dependency here is an X11-protocol tool. |
-| **Windows** | ❌ Not supported | Currently **doesn't even build** on Windows (`internal/engine` uses a Unix-only field of `syscall.SysProcAttr` for detaching the click-daemon process) — nothing to do with the missing capture backend, which also doesn't exist yet. Not on the near-term roadmap; contributions welcome. |
+| **Windows 10/11** | 🧪 New, needs real-world testing | Native backend in pure Go (no C toolchain; cross-builds from any OS with `packaging/windows/build.sh`): global click capture via a low-level mouse hook, foreground-window info and screenshots via Win32/GDI, per-monitor DPI aware. The dashboard opens in its own window via Edge WebView2 (built into Windows 11; falls back to the browser where it's missing). CI runs the capture, file-locking and daemon-stop tests on a real Windows runner, but nobody has clicked through a full recording on a Windows PC yet. Not yet: auto-caption element names (UI Automation), the idle-recording notification, clicks inside apps running as administrator (Windows blocks hooks into elevated windows). |
 
-If you hit something that looks platform-specific, it's disproportionately likely to be a Linux or (theoretical, since it can't build yet) Windows issue rather than a macOS one — please file it with your OS and desktop environment.
+If you hit something that looks platform-specific, it's disproportionately likely to be a Linux or Windows issue rather than a macOS one — please file it with your OS and desktop environment.
 
 ## Why
 
