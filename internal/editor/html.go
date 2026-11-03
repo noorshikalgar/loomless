@@ -15,6 +15,7 @@ func indexHTML(name string) string {
 })();</script>
 <style>` + editorCSS + `</style>
 </head><body>
+<a id="backLink" class="back-link" hidden>&larr; All recordings</a>
 <div class="page-header">
   <h1>` + html.EscapeString(name) + `</h1>
   <div class="theme-picker">
@@ -94,6 +95,8 @@ const editorCSS = `
   body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); max-width: 900px; margin-inline: auto; }
   h1 { margin-bottom: 0.25rem; }
   .hint { color: var(--text-muted); margin-top: 0; margin-bottom: 0.75rem; }
+  .back-link { display: inline-block; margin-bottom: 0.75rem; color: var(--text-muted); text-decoration: none; font-size: 0.9rem; }
+  .back-link:hover { color: var(--text); }
   .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
   /* Icon-only theme switcher: a native <select> (free keyboard nav and
      a real OS-native dropdown menu) with its own text hidden and a
@@ -1978,6 +1981,22 @@ const editorJS = `
       }).catch(function(e) { alert(e.message || 'Nothing to reset.'); });
     });
   }
+
+  // Back to the dashboard that opened this editor. It passes its own
+  // address as ?back= because the editor runs on a separate port and
+  // can't know it otherwise. Only loopback http URLs are honored, so a
+  // crafted link can't turn this into an open redirect.
+  (function() {
+    var back = new URLSearchParams(location.search).get('back');
+    if (!back) return;
+    try {
+      var u = new URL(back);
+      if (u.protocol !== 'http:' || u.hostname !== '127.0.0.1') return;
+      var link = document.getElementById('backLink');
+      link.href = u.href;
+      link.hidden = false;
+    } catch (e) {}
+  })();
 
   // Theme select — the actual <html data-theme> attribute is already
   // set by the inline script in <head> (before first paint, so there's

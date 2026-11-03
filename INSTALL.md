@@ -20,6 +20,29 @@ go build -o loomless ./cmd/loomless
 sudo mv loomless /usr/local/bin/
 ```
 
+## Desktop app (macOS)
+
+For people who'd rather not touch a terminal, build `Loomless.app` — a
+double-clickable app that opens the dashboard in its own window:
+
+```bash
+packaging/macos/build-app.sh             # → dist/Loomless.app
+UNIVERSAL=1 packaging/macos/build-app.sh # Apple Silicon + Intel in one app
+```
+
+Drag `dist/Loomless.app` into `/Applications` and open it. The same
+binary still works as the CLI (`Loomless.app/Contents/MacOS/loomless
+record start …`), and `loomless app` opens the window from a terminal.
+
+Because the app itself runs the click capture, macOS asks for the
+permissions below **for Loomless**, not for Terminal. The build is
+ad-hoc signed: fine on the Mac that built it, but on any other Mac
+Gatekeeper blocks it until it's Developer ID signed and notarized (see
+PUBLISHING.md). Rebuilding changes the ad-hoc signature, so macOS may
+ask for the permissions again after each rebuild.
+
+Anything the app would have printed goes to `~/.loomless/app.log`.
+
 ## macOS permissions — what each one is for, and what happens without it
 
 Loomless asks macOS for two permissions the first time it needs them.

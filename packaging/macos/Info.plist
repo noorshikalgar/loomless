@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Loomless</string>
+	<key>CFBundleDisplayName</key>
+	<string>Loomless</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.noorshikalgar.loomless</string>
+	<key>CFBundleExecutable</key>
+	<string>loomless</string>
+	<key>CFBundleIconFile</key>
+	<string>Loomless</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<!-- Window titles and positions come from System Events via
+	     AppleScript; macOS shows this text in the Automation prompt. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Loomless reads the name and position of the window you click so each screenshot shows just that window.</string>
+</dict>
+</plist>

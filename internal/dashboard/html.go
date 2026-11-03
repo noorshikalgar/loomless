@@ -673,8 +673,12 @@ const dashboardJS = `
 
     if (action === 'open') {
       apiJSON('POST', sessionPath(name, 'edit')).then(function(res) {
-        var w = window.open(res.url, '_blank');
-        if (!w) window.location.href = res.url;
+        // The editor gets a way back here: it lives on its own port, so
+        // it can't know the dashboard's address otherwise.
+        var url = res.url + '?back=' + encodeURIComponent(location.href);
+        if (window.LOOMLESS_DESKTOP) { location.href = url; return; }
+        var w = window.open(url, '_blank');
+        if (!w) location.href = url;
       }).catch(function(e) { Loomless.toast(e.message || 'Could not open the editor.', 'error'); });
 
     } else if (action === 'export') {
