@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/noorshikalgar/loomless/internal/dashboard"
 	"github.com/noorshikalgar/loomless/internal/desktop"
 	"github.com/noorshikalgar/loomless/internal/session"
@@ -30,8 +32,9 @@ func launchedAsApp(args []string) bool {
 	if len(args) > 0 {
 		return false
 	}
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice == 0
+	// A real terminal check, not "is stdin a character device": Finder
+	// hands apps /dev/null, which is one.
+	return !isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
 // cmdApp runs the dashboard inside a native desktop window. Closing the
@@ -85,8 +88,7 @@ func startDashboard() (net.Listener, *http.Server, error) {
 }
 
 func stderrIsTerminal() bool {
-	fi, err := os.Stderr.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())
 }
 
 // openAppLog opens ~/.loomless/app.log for appending.
