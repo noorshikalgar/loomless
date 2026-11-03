@@ -20,13 +20,19 @@ import (
 	"syscall"
 
 	"github.com/noorshikalgar/loomless/internal/capture"
-	"github.com/noorshikalgar/loomless/internal/dashboard"
 	"github.com/noorshikalgar/loomless/internal/editor"
 	"github.com/noorshikalgar/loomless/internal/engine"
 	"github.com/noorshikalgar/loomless/internal/session"
 )
 
 func main() {
+	if launchedAsApp(os.Args[1:]) {
+		if err := cmdApp(nil); err != nil {
+			fmt.Fprintln(os.Stderr, "loomless:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
@@ -50,6 +56,8 @@ func main() {
 		err = cmdTUI(os.Args[2:])
 	case "serve":
 		err = cmdServe(os.Args[2:])
+	case "app":
+		err = cmdApp(os.Args[2:])
 	case "mcp":
 		err = cmdMCP(os.Args[2:])
 	case "__click-daemon":
@@ -87,6 +95,7 @@ Usage:
   loomless edit <name>             Open the local web editor (reorder/hide/caption)
   loomless tui                     Session dashboard — list, edit, export, all from the terminal
   loomless serve                   Web dashboard — list, record, edit, export, all from the browser
+  loomless app                     The same dashboard in its own desktop window (what double-clicking Loomless runs)
   loomless mcp                     Run the MCP server (stdio) for agent-driven capture
 
 Session data lives under ~/.loomless/sessions/<name>/.`)
@@ -369,20 +378,14 @@ func cmdEdit(args []string) error {
 // solving the identical "local single-user tool" problem one level up
 // (every session, not just one).
 func cmdServe(args []string) error {
-	handler, err := dashboard.NewHandler()
+	ln, server, err := startDashboard()
 	if err != nil {
 		return err
-	}
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("start dashboard server: %w", err)
 	}
 	url := fmt.Sprintf("http://%s/", ln.Addr().String())
 	fmt.Printf("Loomless dashboard running at %s (Ctrl+C to stop)\n", url)
 	openBrowser(url)
 
-	server := &http.Server{Handler: handler}
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
